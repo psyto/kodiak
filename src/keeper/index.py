@@ -63,6 +63,15 @@ from src.keeper.position_manager import (
     should_exit_position,
 )
 from src.keeper.cost_calculator import evaluate_trade_economics, passes_cost_gate
+from src.keeper.cross_venue_detector import (
+    fetch_cross_venue_funding,
+    format_cross_venue,
+    get_cross_venue_adjustment,
+)
+from src.keeper.liquidation_detector import (
+    detect_liquidations,
+    format_liquidation_state,
+)
 
 
 def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_url: str) -> float:
@@ -176,12 +185,26 @@ async def run_signal_detection(api_url: str) -> bool:
         current_signals = detect_signals(api_url=api_url)
         print(format_signal_state(current_signals))
 
+        # Hyperliquid-specific: real liquidation detection
+        liq_result = detect_liquidations(api_url=api_url)
+        print(format_liquidation_state(liq_result))
+
+        # Combine signal severity with liquidation severity (take max)
+        effective_severity = max(current_signals.severity, liq_result["max_severity"])
+        if liq_result["cascade_detected"]:
+            effective_severity = max(effective_severity, SIGNAL_CRITICAL)
+            print("LIQUIDATION CASCADE: Escalating to CRITICAL")
+
+        # Hyperliquid-specific: cross-venue funding comparison
+        cross_venue = fetch_cross_venue_funding(api_url)
+        print(format_cross_venue(cross_venue))
+
         vol_regime = (
             current_leverage.regime if current_leverage else classify_vol_regime(3000)
         )
 
         previous_regime = current_regime
-        current_regime = compute_regime(vol_regime, current_signals.severity)
+        current_regime = compute_regime(vol_regime, effective_severity)
         print(f"Regime: {format_regime(current_regime)}")
 
         if should_trigger_emergency_rebalance(previous_regime, current_regime):
@@ -390,9 +413,13 @@ async def run_rebalance(
 
     print(f"Basis targets: {len(basis_targets)} markets")
 
-    # 3. Open new positions with imbalance-directed entry
+    # 3. Open new positions with imbalance-directed entry + cross-venue intelligence
     active_markets = {p.market for p in active_positions}
     imbalance_map = {m.market: m for m in latest_imbalances}
+
+    # Fetch cross-venue funding for entry adjustment
+    cross_venue = fetch_cross_venue_funding(api_url)
+    cross_venue_map = {v.coin: v for v in cross_venue}
 
     for target in basis_targets:
         market = target["market"]
@@ -413,6 +440,13 @@ async def run_rebalance(
                     continue
                 direction = trade["direction"]
                 entry_reason = trade["reason"]
+
+        # Hyperliquid-specific: cross-venue funding adjustment
+        cv = cross_venue_map.get(market)
+        if cv:
+            adj = get_cross_venue_adjustment(cv)
+            if abs(adj["adjustment"]) > 0:
+                entry_reason += f" | XV: {adj['reason']}"
 
         # In cautious/defensive mode, require stronger signals
         if current_regime and current_regime.rebalance_mode in ("cautious", "defensive"):

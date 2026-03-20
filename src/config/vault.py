@@ -125,4 +125,13 @@ STRATEGY_CONFIG = {
 
     # Emergency rebalance trigger
     "emergency_deployment_drop_pct": 30,
+
+    # --- KODIAK-SPECIFIC: Hyperliquid enhancements ---
+
+    # Cross-venue funding: min spread (APY) to consider HL diverged from CEX
+    "cross_venue_spread_threshold_apy": 5.0,
+
+    # Liquidation detection thresholds (USD/min per market)
+    # These are used as defaults; per-market thresholds are in liquidation_detector.py
+    "liq_detection_window_seconds": 300,  # 5 min rolling window
 }
