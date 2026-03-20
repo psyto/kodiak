@@ -67,30 +67,30 @@ from src.keeper.cost_calculator import evaluate_trade_economics, passes_cost_gat
 
 def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_url: str) -> float:
     """
-    Get account equity, handling unified account mode.
-    In unified mode, USDC is in spotClearinghouseState, not clearinghouseState.
+    Get total account equity in unified account mode.
+    Unified mode: perp accountValue + spot USDC balance = total equity.
     """
     import requests
     user_addr = vault_address or exchange.wallet.address
+    total = 0.0
 
-    # Try perp clearinghouse first
+    # Perp equity (includes margin + unrealized PnL)
     resp = requests.post(f"{api_url}/info", json={
         "type": "clearinghouseState", "user": user_addr
     }, timeout=10)
     state = resp.json()
-    perp_equity = float(state.get("marginSummary", {}).get("accountValue", "0"))
-    if perp_equity > 0:
-        return perp_equity
+    total += float(state.get("marginSummary", {}).get("accountValue", "0"))
 
-    # Unified account: check spot balance
+    # Spot USDC balance (idle capital in unified mode)
     resp2 = requests.post(f"{api_url}/info", json={
         "type": "spotClearinghouseState", "user": user_addr
     }, timeout=10)
     spot = resp2.json()
     for bal in spot.get("balances", []):
         if bal["coin"] == "USDC":
-            return float(bal["total"])
-    return 0.0
+            total += float(bal["total"])
+
+    return total
 
 
 # --- Global State ---

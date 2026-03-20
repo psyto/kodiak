@@ -161,10 +161,36 @@ async def close_basis_position(
     market: str,
     vault_address: str = None,
 ) -> dict:
-    """Close an existing position on a market."""
-    # Get current position
+    """Close an existing position on a market. Also cancels any open orders."""
+    import requests as _req
+
     user_addr = vault_address or exchange.wallet.address
-    user_state = info.user_state(user_addr)
+
+    # First cancel any open orders for this market
+    try:
+        api_url = exchange.base_url
+        resp = _req.post(f"{api_url}/info", json={
+            "type": "openOrders", "user": user_addr
+        }, timeout=10)
+        open_orders = resp.json()
+        for order in open_orders:
+            if order.get("coin") == market:
+                try:
+                    exchange.cancel(market, order["oid"])
+                    print(f"Cancelled order {order['oid']} on {market}")
+                except Exception as e:
+                    print(f"Failed to cancel order on {market}: {e}")
+    except Exception as e:
+        print(f"Error checking open orders: {e}")
+
+    # Check if we have an actual filled position to close
+    try:
+        user_state = info.user_state(user_addr)
+    except Exception:
+        resp = _req.post(f"{api_url}/info", json={
+            "type": "clearinghouseState", "user": user_addr
+        }, timeout=10)
+        user_state = resp.json()
 
     position = None
     for pos_wrapper in user_state.get("assetPositions", []):
@@ -173,43 +199,13 @@ async def close_basis_position(
             position = pos
             break
 
-    if position is None:
-        print(f"No position to close on {market}")
+    if position is None or abs(float(position.get("szi", "0"))) == 0:
+        print(f"No filled position on {market} (orders cancelled)")
         return {}
 
-    size = abs(float(position.get("szi", "0")))
-    if size == 0:
-        print(f"Zero-size position on {market}")
-        return {}
-
-    # If currently short (szi < 0), buy to close. If long (szi > 0), sell to close.
-    current_szi = float(position.get("szi", "0"))
-    is_buy = current_szi < 0  # Short position → buy to close
-
-    if STRATEGY_CONFIG["use_limit_orders"]:
-        all_mids = info.all_mids()
-        mid_price = float(all_mids.get(market, 0))
-        # For closing: place limit slightly better than mid
-        spread_sign = -1 if is_buy else 1
-        spread_multiplier = 1 + spread_sign * (STRATEGY_CONFIG["limit_order_spread_bps"] / 10000)
-        limit_price = round(mid_price * spread_multiplier, 6)
-
-        result = exchange.order(
-            coin=market,
-            is_buy=is_buy,
-            sz=_round_size(market, size),
-            limit_px=limit_price,
-            order_type={"limit": {"tif": "Gtc"}},
-            reduce_only=True,
-            vault_address=vault_address,
-        )
-        print(f"Close LIMIT on {market} ({size} coins) @ ${limit_price:.2f} (maker) | {result}")
-        return result
-
-    # Market close
+    # market_close uses 'coin' param (SDK inconsistency with market_open using 'name')
     result = exchange.market_close(
         coin=market,
-        vault_address=vault_address,
     )
     print(f"Closed MARKET on {market} (taker) | {result}")
     return result
