@@ -78,12 +78,15 @@ def fetch_reference_vol(api_url: str = HL_MAINNET_API) -> int:
     # 168 hours = 7 days
     start_time = end_time - (168 * 60 * 60 * 1000)
 
+    # HL API requires "req" wrapper for candleSnapshot
     payload = {
         "type": "candleSnapshot",
-        "coin": "BTC",
-        "interval": "1h",
-        "startTime": start_time,
-        "endTime": end_time,
+        "req": {
+            "coin": "BTC",
+            "interval": "1h",
+            "startTime": start_time,
+            "endTime": end_time,
+        },
     }
 
     resp = requests.post(f"{api_url}/info", json=payload, timeout=10)
