@@ -65,12 +65,14 @@ Measures how fast the funding-implied imbalance is changing across monitored mar
 - Thresholds: 4% (LOW), 12% (HIGH), 25% (CRITICAL)
 - Tighter than Yogi (5/15/30%) because Hyperliquid's higher leverage amplifies cascade speed
 
-#### 2. Liquidation Cascade
+#### 2. Liquidation Cascade (OI Drop Proxy)
 
 Proxied by sudden OI drop. When OI decreases rapidly without corresponding price recovery, it indicates forced liquidations — margin calls cascading through the system. Hyperliquid's up-to-50x leverage makes cascades more violent than on Drift.
 
 - Measures percentage OI drop over rolling 1-hour window
 - Thresholds: 4% (LOW), 12% (HIGH), 25% (CRITICAL)
+
+**Note:** This proxy is supplemented by the Real Liquidation Detector (see below) which tracks actual liquidation events.
 
 #### 3. Funding Rate Volatility
 
@@ -87,9 +89,62 @@ Mark/oracle divergence across markets indicates thin liquidity, forced selling, 
 - Thresholds: 0.3% (LOW), 1.0% (HIGH), 2.5% (CRITICAL)
 - Tighter than Yogi (0.5/1.5/3.0%) because Hyperliquid's orderbook should maintain tighter spreads in normal conditions
 
+### Hyperliquid-Specific Signal Enhancements
+
+Beyond the four base signal dimensions (shared with Yogi), Kodiak adds three Hyperliquid-native intelligence modules:
+
+#### 5. Real Liquidation Detector
+
+**Replaces OI-drop proxy with actual liquidation event tracking.**
+
+On Hyperliquid, liquidation trades carry a zero-hash signature (`0x000...000`). By filtering recent trades for this pattern, Kodiak detects real liquidation events with:
+
+- **Volume tracking**: Total USD liquidated per market in a rolling 5-minute window
+- **Intensity measurement**: USD/min liquidation rate, classified into severity levels:
+  - BTC: $5K/min (LOW), $50K/min (HIGH), $200K/min (CRITICAL)
+  - ETH: $3K/min (LOW), $30K/min (HIGH), $150K/min (CRITICAL)
+  - SOL: $1K/min (LOW), $10K/min (HIGH), $50K/min (CRITICAL)
+  - HYPE: $2K/min (LOW), $20K/min (HIGH), $100K/min (CRITICAL)
+- **Direction bias**: Whether longs or shorts are being squeezed (from trade side)
+- **Cascade detection**: When intensity increases >50% between detection cycles AND exceeds $1K/min, escalates to CRITICAL regardless of threshold
+
+The liquidation severity is combined with the base signal severity (max of both). A cascade detection automatically escalates to CRITICAL.
+
+**First live result (2026-03-20):** Detected a HYPE short squeeze — $18,264 liquidated in 5 minutes (9 events, $3,653/min). Correctly escalated to CRITICAL and switched regime to defensive mode (15% deployment, 0.2x leverage).
+
+#### 6. Cross-Venue Funding Comparison
+
+**Compares Hyperliquid's predicted funding rate against Binance and Bybit.**
+
+Uses Hyperliquid's `predictedFundings` endpoint which provides next funding rates across venues. Each venue's rate is normalized to hourly for comparison:
+
+- **HL funding >> CEX** (spread > 5% APY): Signal = `hl_high` — HL rate will likely converge down. SHORT is profitable now but faces convergence risk.
+- **HL funding << CEX** (spread < -5% APY): Signal = `hl_low` — HL rate will likely converge up. LONG opportunity as HL catches up to CEX consensus.
+- **All venues aligned**: Signal = `aligned` — Strong directional signal, higher confidence for entry.
+- **No CEX data** (e.g., HYPE has no Binance/Bybit listing): No adjustment.
+
+Cross-venue adjustment is applied during position entry, annotating the trade reason (e.g., "XV: HL funding +8.8% above CEX → SHORT profitable but convergence risk").
+
+#### 7. Funding Pre-Positioning
+
+**Times entries and exits to Hyperliquid's hourly funding settlement.**
+
+Hyperliquid settles funding exactly on the hour (XX:00:00 UTC). The predicted rate is known before settlement. Kodiak uses a 10-minute pre-positioning window:
+
+| Scenario | Current Position | Predicted Rate | Action |
+|----------|-----------------|---------------|--------|
+| 5 min to settlement | SHORT | Positive (+11% APY) | **Hold** — collecting funding |
+| 5 min to settlement | LONG | Positive (+11% APY) | **Exit** — would pay funding |
+| 5 min to settlement | SHORT | Negative (-15% APY) | **Exit** — would pay funding |
+| 5 min to settlement | None | Positive (+11% APY) | **Enter SHORT** — capture settlement |
+| 5 min to settlement | None | Low (+0.9% APY) | **Skip** — rate below 5% APY threshold |
+| 20 min to settlement | Any | Any | **Wait** — outside pre-positioning window |
+
+This runs every 30 seconds in the keeper loop, ensuring timely action near settlement.
+
 ### Regime Engine Decision Matrix
 
-The regime engine combines vol regime (backward-looking) with signal severity (forward-looking):
+The regime engine combines vol regime (backward-looking) with signal severity (forward-looking, including liquidation and cross-venue data):
 
 ```
                    Signal Severity
@@ -223,7 +278,9 @@ Kodiak sets a `scheduleCancel` on Hyperliquid every heartbeat cycle. If the keep
 | Source | Where | Est. APY Contribution |
 |--------|-------|----------------------|
 | Funding harvesting | Hyperliquid perps (bidirectional, hourly settlement) | 8-15% |
+| Funding pre-positioning | Timed entries before hourly settlement (HL-specific) | 1-3% |
 | Premium convergence | Mark/oracle mean reversion | 2-5% |
+| Cross-venue arbitrage | Trade HL funding divergence from CEX consensus (HL-specific) | 1-2% |
 | Maker execution | Limit orders reduce cost vs taker (5 bps vs 11 bps RT) | 0.5-1% |
 | **Total** | | **15-25% (normal) / 8-15% (hostile)** |
 
@@ -241,12 +298,15 @@ At higher volume tiers, maker fees drop further (0% at >$500M 14-day volume) wit
 
 ## Known Limitations
 
-1. **OI imbalance estimation** — Hyperliquid does not expose long/short OI split directly. We estimate imbalance from funding rate direction and magnitude. This is a proxy, not ground truth.
+1. **OI imbalance estimation** — Hyperliquid does not expose long/short OI split directly. We estimate imbalance from funding rate direction and magnitude. This is a proxy, not ground truth. The real liquidation detector partially compensates by providing actual direction bias data.
 2. **No lending floor** — Unlike Yogi which earns 1.5-6.5% APY on idle capital via Kamino/Marginfi, Kodiak's idle USDC earns nothing. Capital efficiency depends entirely on perp deployment.
-3. **Signal detection building track record** — The anomaly detector is adapted from Yogi's Drift-tuned thresholds. Hyperliquid's different microstructure may require threshold adjustments after live observation.
+3. **Signal detection building track record** — The anomaly detector is adapted from Yogi's Drift-tuned thresholds. Hyperliquid's different microstructure may require threshold adjustments after live observation. Liquidation thresholds (USD/min) are initial estimates and may need calibration.
 4. **Regime matrices are manually tuned** — The 5x4 deployment/leverage matrices were designed from first principles, not optimized from Hyperliquid historical data.
 5. **Single-keeper architecture** — No multi-reporter consensus. The keeper is a single point of trust, mitigated by the dead man's switch.
 6. **Unified account mode** — Hyperliquid's unified account mode shares collateral between spot and perp. Equity calculation must sum both to avoid false drawdown triggers.
+7. **Cross-venue data availability** — Some coins (e.g., HYPE) have no Binance/Bybit listing, so cross-venue comparison is unavailable. The system falls back to HL-only signals for these markets.
+8. **Liquidation detection via recentTrades** — The `recentTrades` endpoint returns only the most recent trades (typically 10-20). High-frequency liquidation events may be missed between 5-minute detection cycles. WebSocket streaming would improve coverage but adds infrastructure complexity.
+9. **Pre-positioning assumes hourly settlement** — If Hyperliquid changes its funding interval, the pre-positioning logic would need adjustment.
 
 ## Implementation Details
 
@@ -265,16 +325,23 @@ At higher volume tiers, maker fees drop further (0% at >$500M 14-day volume) wit
 ```
 Main Loop (30-second tick)
 +-- Every 30s:  Emergency checks (margin ratio + drawdown + signal severity)
-+-- Every 5m:   Signal detection (4 dimensions) + regime update
++-- Every 5m:   Signal detection (4 base dimensions) + regime update
+|               +-- Real liquidation detection (zero-hash trades) [HL-specific]
+|               +-- Cross-venue funding comparison (HL vs CEX) [HL-specific]
+|               +-- Combined severity = max(signals, liquidations, cascade)
 |               --> Emergency rebalance if regime shifts dramatically
 +-- Every 30m:  Funding scan + leverage update + imbalance scan
 +-- Every 4h:   Full rebalance cycle
 |   +-- Apply regime-adjusted deployment %
 |   +-- Scale targets by regime-adjusted leverage
 |   +-- Weight allocation by annualized funding rate
+|   +-- Cross-venue adjustment on entry direction [HL-specific]
 |   +-- Require 40%+ signal strength in cautious/defensive mode
 |   +-- Close underperforming positions
 |   +-- Open new positions in top 3 markets
++-- Every 30s:  Funding pre-positioning check [HL-specific]
+|               +-- Evaluate predicted rate vs current positions
+|               +-- Exit positions paying funding near settlement
 +-- Every 30s:  Heartbeat log (equity, regime, signal, deployment)
 +-- Every 30s:  Refresh dead man's switch (1-hour auto-cancel)
 ```
@@ -302,6 +369,10 @@ Kodiak is a port of [Yogi](https://github.com/psyto/yogi) from Drift/Solana to H
 | Funding | Continuous settlement | Hourly settlement |
 | Vol reference | SOL-PERP candles | BTC candles |
 | OI data | Direct long/short split from Drift API | Estimated from funding direction |
+| Liquidation detection | OI drop proxy (indirect) | Real liquidation events via zero-hash trades |
+| Cross-venue comparison | Not available | HL vs Binance vs Bybit funding rates |
+| Funding timing | No timing alpha (continuous) | Pre-positioning 10 min before hourly settlement |
+| Signal dimensions | 4 | 6 (4 base + liquidation cascade + cross-venue) |
 | Maker fees | -0.2 bps (rebate) | 1.5 bps |
 | Lending floor | 30% to Kamino/Marginfi | None |
 | Signal thresholds | OI shift 5/15/30%, spread 0.5/1.5/3.0% | OI shift 4/12/25%, spread 0.3/1.0/2.5% |

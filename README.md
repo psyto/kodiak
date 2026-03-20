@@ -2,7 +2,7 @@
 
 **The biggest bear in the room. Hyperliquid funding rate vault with intelligent signal detection.**
 
-Kodiak is a production-grade USDC vault that combines Hyperliquid perp funding rate arbitrage with a forward-looking anomaly detection engine. Four signal dimensions — OI imbalance shift, liquidation cascades, funding rate volatility, and spread blow-outs — drive a regime engine that adapts deployment and leverage before stress hits. Ported from [Yogi](https://github.com/psyto/yogi) (Drift/Solana) to Hyperliquid's native vault system.
+Kodiak is a production-grade USDC vault that combines Hyperliquid perp funding rate arbitrage with a forward-looking anomaly detection engine. Six signal dimensions — OI imbalance shift, real liquidation tracking, funding rate volatility, spread blow-outs, cross-venue funding divergence, and funding pre-positioning — drive a regime engine that adapts deployment and leverage before stress hits. Built on [Yogi](https://github.com/psyto/yogi) (Drift/Solana), extended with Hyperliquid-native intelligence.
 
 ## Strategy
 
@@ -27,18 +27,35 @@ USDC Deposit --> Hyperliquid Vault
                               |
                               +-- Signal Detector (every 5 min)
                               |   +-- OI imbalance shift (mass positioning)
-                              |   +-- Liquidation cascade (OI drop proxy)
                               |   +-- Funding rate volatility (regime transition)
                               |   +-- Spread blow-out (mark/oracle stress)
                               |   --> Severity: CLEAR / LOW / HIGH / CRITICAL
                               |
+                              +-- Liquidation Detector (every 5 min) [HL-specific]
+                              |   +-- Real liquidation events (zero-hash trades)
+                              |   +-- Liquidation intensity (USD/min)
+                              |   +-- Cascade detection (accelerating rate)
+                              |   +-- Direction bias (long vs short squeezed)
+                              |   --> Escalates to CRITICAL on cascade
+                              |
+                              +-- Cross-Venue Detector (every 5 min) [HL-specific]
+                              |   +-- HL vs Binance vs Bybit funding rates
+                              |   +-- Detects HL divergence from CEX
+                              |   --> Entry direction adjustment
+                              |
                               +-- Regime Engine (vol x signal --> deployment)
                               |   +-- Reads vol regime (Parkinson estimator)
-                              |   +-- Reads signal severity (detector output)
+                              |   +-- Reads signal + liquidation severity (max)
                               |   --> deploymentPct + maxLeverage + rebalanceMode
+                              |
+                              +-- Funding Pre-Positioning [HL-specific]
+                              |   +-- Tracks time to next hourly settlement
+                              |   +-- Pre-positions 10 min before settlement
+                              |   +-- Exits positions paying funding before settlement
                               |
                               +-- Imbalance Detector (premium + funding)
                               +-- Direction: SHORT or LONG based on composite signal
+                              +-- Cross-venue adjustment on entry direction
                               +-- Maker limit orders (1.5 bps fee)
                               +-- 30-second health monitoring
                               +-- Low turnover: 7-day min hold
@@ -59,13 +76,18 @@ USDC Deposit --> Hyperliquid Vault
 | Lending floor | 30% (Kamino/Marginfi) | None (100% to perps) |
 | Markets | SOL, BTC, ETH, DOGE, SUI, AVAX | BTC, ETH, SOL, HYPE |
 | Safety | scheduleCancel not native | Dead man's switch built-in |
+| Liquidation data | OI drop proxy | Real liquidation events (zero-hash trades) |
+| Cross-venue | Not available | HL vs Binance vs Bybit funding comparison |
+| Funding timing | Continuous (no timing alpha) | Hourly pre-positioning (10 min before settlement) |
 
 ### Yield Stack
 
 | Source | Mechanism | Est. APY Contribution |
 |--------|-----------|----------------------|
 | Funding harvesting | Bidirectional perp positions collect hourly funding | 8-15% |
+| Funding pre-positioning | Enter before hourly settlement to capture known rates | 1-3% |
 | Premium convergence | Mark/oracle deviation mean-reverts | 2-5% |
+| Cross-venue arbitrage | Trade HL funding divergence from CEX consensus | 1-2% |
 | Maker execution | Limit orders reduce cost vs taker | 0.5-1% |
 | **Combined target** | | **15-25% (normal) / 8-12% (hostile)** |
 
@@ -75,7 +97,10 @@ USDC Deposit --> Hyperliquid Vault
 
 | Module | File | Purpose |
 |--------|------|---------|
-| Signal Detector | `src/keeper/signal_detector.py` | 4-dimension anomaly detection (OI shift, liquidation, funding vol, spread) |
+| Signal Detector | `src/keeper/signal_detector.py` | 4-dimension anomaly detection (OI shift, funding vol, spread, OI drop) |
+| Liquidation Detector | `src/keeper/liquidation_detector.py` | **[HL-specific]** Real liquidation tracking via zero-hash trades, cascade detection |
+| Cross-Venue Detector | `src/keeper/cross_venue_detector.py` | **[HL-specific]** HL vs Binance vs Bybit funding rate comparison |
+| Funding Pre-Positioning | `src/keeper/funding_preposition.py` | **[HL-specific]** Pre-position before hourly funding settlement |
 | Regime Engine | `src/keeper/regime_engine.py` | Vol x signal severity --> deployment % and leverage cap |
 | Imbalance Detector | `src/keeper/imbalance_detector.py` | Reads premium, funding — computes composite signal and direction |
 | Funding Scanner | `src/keeper/funding_scanner.py` | Fetches and ranks all Hyperliquid perp markets by funding rate |
@@ -85,6 +110,42 @@ USDC Deposit --> Hyperliquid Vault
 | Position Manager | `src/keeper/position_manager.py` | Bidirectional position management with maker orders |
 | Keeper Loop | `src/keeper/index.py` | Main event loop — signals, regime, imbalance, rebalance |
 | Config | `src/config/` | Strategy parameters, signal thresholds, deployment matrices |
+
+## Hyperliquid-Specific Intelligence
+
+Three modules that leverage Hyperliquid-native data not available on other DEXes:
+
+### 1. Real Liquidation Detection
+
+Instead of proxying liquidations from OI drop (like Yogi on Drift), Kodiak detects **actual liquidation events** from Hyperliquid's trade data. Liquidation trades have a zero-hash signature, enabling:
+
+- **Liquidation volume tracking** — USD amount liquidated per market per rolling window
+- **Intensity measurement** — USD/min liquidation rate for severity classification
+- **Direction bias** — whether longs or shorts are getting squeezed
+- **Cascade detection** — accelerating liquidation rate (>50% increase) triggers CRITICAL
+
+First live result: Caught a HYPE short squeeze ($18,264 in 5 min, 9 events, $3,653/min) and correctly escalated to CRITICAL, switching the regime to defensive mode.
+
+### 2. Cross-Venue Funding Comparison
+
+Compares Hyperliquid's predicted funding rate against Binance and Bybit:
+
+- **HL funding >> CEX** → HL rate will likely converge down (SHORT profitable but convergence risk)
+- **HL funding << CEX** → HL rate will likely converge up (LONG opportunity)
+- **All venues aligned** → High confidence in the directional signal
+
+Entry decisions are annotated with cross-venue intelligence (e.g., "XV: HL funding +8.8% above CEX").
+
+### 3. Funding Pre-Positioning
+
+Hyperliquid settles funding hourly, on the hour. The predicted rate is known before settlement:
+
+- **10-minute window** — Pre-position before each hourly settlement
+- **Hold favorable positions** — Keep SHORT when positive funding, LONG when negative
+- **Exit unfavorable positions** — Close positions that would pay funding at settlement
+- **Skip low rates** — Don't bother positioning for rates below 5% APY
+
+This is pure timing alpha — capturing a known event, not predicting.
 
 ## Regime Engine
 
@@ -190,9 +251,10 @@ Kodiak is **live on Hyperliquid mainnet** with an automated keeper running 24/7 
 Keeper (EC2, 24/7)
   |
   +-- Agent wallet signs on behalf of master/vault
-  +-- Signal detection (5 min) via Hyperliquid REST API
-  +-- Health monitoring (30 sec)
-  +-- Rebalance (4 hours)
+  +-- Signal detection (5 min) — 4D anomaly + liquidation + cross-venue
+  +-- Funding pre-positioning (30 sec) — near hourly settlement
+  +-- Health monitoring (30 sec) — margin + drawdown + signal severity
+  +-- Rebalance (4 hours) — with cross-venue entry intelligence
   +-- Dead man's switch (1 hour auto-cancel)
   +-- Heartbeat logging every 30 seconds
 ```
@@ -204,7 +266,8 @@ Keeper (EC2, 24/7)
 | `metaAndAssetCtxs` | Market data, funding rates, OI, mark/oracle prices |
 | `candleSnapshot` | Hourly candles for Parkinson vol estimator |
 | `fundingHistory` | Historical funding rates for volatility calculation |
-| `predictedFundings` | Cross-venue funding rate comparison |
+| `predictedFundings` | Cross-venue funding comparison (HL vs Binance vs Bybit) + pre-positioning |
+| `recentTrades` | Real liquidation detection (zero-hash trade filtering) |
 | `clearinghouseState` | Account positions, margin, PnL |
 | `spotClearinghouseState` | Spot USDC balance (unified account mode) |
 | `openOrders` | Active order management |
@@ -222,7 +285,14 @@ Keeper (EC2, 24/7)
 
 ## Lineage
 
-Kodiak is a port of [Yogi](https://github.com/psyto/yogi) from Drift/Solana to Hyperliquid. The strategy brain (regime engine, 4D signal detector, imbalance scoring, cost calculator) is identical in logic — adapted for Hyperliquid's API, fee structure, hourly funding settlement, and vault system.
+Kodiak started as a port of [Yogi](https://github.com/psyto/yogi) from Drift/Solana to Hyperliquid. The core strategy brain (regime engine, signal detector, imbalance scoring, cost calculator) shares the same logic. Kodiak then extends beyond Yogi with three Hyperliquid-native modules:
+
+| Module | Yogi (Drift) | Kodiak (Hyperliquid) |
+|---|---|---|
+| Liquidation detection | OI drop proxy (indirect) | Real liquidation events via zero-hash trades |
+| Cross-venue funding | Not available | HL vs Binance vs Bybit comparison |
+| Funding timing | Continuous (no timing alpha) | Hourly pre-positioning (10 min window) |
+| Signal dimensions | 4 | 6 (4 base + liquidation cascade + cross-venue) |
 
 ## License
 
