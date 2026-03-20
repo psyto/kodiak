@@ -67,8 +67,15 @@ def compute_target_allocations(
     return {"lending_target": 0, "basis_targets": basis_targets}
 
 
-def _round_size(coin: str, size: float) -> float:
+def _round_size(coin: str, size: float, info: Info = None) -> float:
     """Round size to the appropriate number of decimals for the coin."""
+    # Try to get from SDK's metadata first
+    if info and hasattr(info, 'name_to_coin') and hasattr(info, 'coin_to_asset'):
+        asset = info.coin_to_asset.get(coin)
+        if asset is not None and asset in info.asset_to_sz_decimals:
+            decimals = info.asset_to_sz_decimals[asset]
+            return round(size, decimals)
+    # Fallback to static mapping
     decimals = SIZE_DECIMALS.get(coin, 2)
     return round(size, decimals)
 
@@ -100,8 +107,12 @@ async def open_basis_position(
     if size_usd <= 0:
         raise ValueError(f"Invalid position size: ${size_usd}")
 
+    # Enforce Hyperliquid minimum $10 notional
+    if size_usd < 10:
+        raise ValueError(f"Size ${size_usd:.2f} below Hyperliquid minimum $10")
+
     # Compute size in coins
-    size_coin = _round_size(market, size_usd / mid_price)
+    size_coin = _round_size(market, size_usd / mid_price, info)
     if size_coin <= 0:
         raise ValueError(f"Size too small for {market}: {size_coin}")
 
@@ -112,15 +123,17 @@ async def open_basis_position(
         # LONG: place below mid (willing to buy lower)
         spread_sign = -1 if is_buy else 1
         spread_multiplier = 1 + spread_sign * (STRATEGY_CONFIG["limit_order_spread_bps"] / 10000)
-        limit_price = round(mid_price * spread_multiplier, 6)
+        # Round to whole dollar for BTC-class assets, 2 decimals for others
+        price_decimals = 0 if mid_price > 1000 else (1 if mid_price > 100 else 2)
+        limit_price = round(mid_price * spread_multiplier, price_decimals)
 
+        # SDK uses 'name' param for order(), not 'coin'
         result = exchange.order(
-            coin=market,
+            name=market,
             is_buy=is_buy,
             sz=size_coin,
             limit_px=limit_price,
             order_type={"limit": {"tif": "Gtc"}},
-            vault_address=vault_address,
         )
         print(
             f"Opened {direction.upper()} LIMIT ${size_usd:.2f} ({size_coin} {market}) "
@@ -129,11 +142,11 @@ async def open_basis_position(
         return result
 
     # Market order fallback
+    # SDK uses 'name' param for market_open(), not 'coin'
     result = exchange.market_open(
-        coin=market,
+        name=market,
         is_buy=is_buy,
         sz=size_coin,
-        vault_address=vault_address,
     )
     print(
         f"Opened {direction.upper()} MARKET ${size_usd:.2f} ({size_coin} {market}) "

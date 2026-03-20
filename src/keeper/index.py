@@ -98,12 +98,20 @@ def init_hyperliquid(
     base_url = HL_TESTNET_API if network == "testnet" else HL_MAINNET_API
     is_mainnet = network == "mainnet"
 
-    info = Info(base_url, skip_ws=True)
-    exchange = Exchange(
-        account,
-        base_url,
-        vault_address=vault_address,
-    )
+    # Fetch metadata manually to handle testnet spot metadata bugs
+    import requests
+    meta = requests.post(f"{base_url}/info", json={"type": "meta"}, timeout=10).json()
+    try:
+        spot_meta = requests.post(f"{base_url}/info", json={"type": "spotMeta"}, timeout=10).json()
+        info = Info(base_url, skip_ws=True, meta=meta, spot_meta=spot_meta)
+        exchange = Exchange(account, base_url, meta=meta, spot_meta=spot_meta,
+                            vault_address=vault_address)
+    except (IndexError, KeyError):
+        # Testnet spot metadata can be malformed — use empty spot meta
+        empty_spot = {"tokens": [], "universe": []}
+        info = Info(base_url, skip_ws=True, meta=meta, spot_meta=empty_spot)
+        exchange = Exchange(account, base_url, meta=meta, spot_meta=empty_spot,
+                            vault_address=vault_address)
 
     master_account = Account.from_key(private_key)
     print(f"Master wallet: {master_account.address}")
