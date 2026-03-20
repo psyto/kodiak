@@ -134,4 +134,8 @@ STRATEGY_CONFIG = {
     # Liquidation detection thresholds (USD/min per market)
     # These are used as defaults; per-market thresholds are in liquidation_detector.py
     "liq_detection_window_seconds": 300,  # 5 min rolling window
+
+    # Funding pre-positioning
+    "preposition_window_seconds": 600,    # Enter 10 min before settlement
+    "preposition_min_rate_apy": 5.0,      # Minimum rate (APY) to justify pre-positioning
 }

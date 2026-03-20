@@ -72,6 +72,10 @@ from src.keeper.liquidation_detector import (
     detect_liquidations,
     format_liquidation_state,
 )
+from src.keeper.funding_preposition import (
+    evaluate_all_settlements,
+    format_settlements,
+)
 
 
 def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_url: str) -> float:
@@ -562,6 +566,27 @@ async def main() -> None:
             except Exception as err:
                 print(f"Rebalance error: {err}")
             last_rebalance = now
+
+        # Funding pre-positioning check (every 30s — needs to be frequent near settlement)
+        try:
+            current_pos_map = {p.market: p.direction for p in active_positions}
+            settlements = evaluate_all_settlements(
+                current_positions=current_pos_map, api_url=api_url
+            )
+
+            # Only log when near settlement (within pre-positioning window)
+            actionable = [s for s in settlements if s.optimal_action != "wait"]
+            if actionable:
+                print(format_settlements(settlements))
+
+                for s in actionable:
+                    if s.optimal_action == "exit" and s.coin in current_pos_map:
+                        # Exit position that's paying funding at settlement
+                        print(f"  Pre-position EXIT: {s.reason}")
+                        await close_basis_position(exchange, info, s.coin, vault_address)
+                        active_positions[:] = [p for p in active_positions if p.market != s.coin]
+        except Exception as err:
+            print(f"Pre-positioning error: {err}")
 
         # Refresh dead man's switch
         try:
