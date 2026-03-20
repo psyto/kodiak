@@ -65,6 +65,34 @@ from src.keeper.position_manager import (
 from src.keeper.cost_calculator import evaluate_trade_economics, passes_cost_gate
 
 
+def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_url: str) -> float:
+    """
+    Get account equity, handling unified account mode.
+    In unified mode, USDC is in spotClearinghouseState, not clearinghouseState.
+    """
+    import requests
+    user_addr = vault_address or exchange.wallet.address
+
+    # Try perp clearinghouse first
+    resp = requests.post(f"{api_url}/info", json={
+        "type": "clearinghouseState", "user": user_addr
+    }, timeout=10)
+    state = resp.json()
+    perp_equity = float(state.get("marginSummary", {}).get("accountValue", "0"))
+    if perp_equity > 0:
+        return perp_equity
+
+    # Unified account: check spot balance
+    resp2 = requests.post(f"{api_url}/info", json={
+        "type": "spotClearinghouseState", "user": user_addr
+    }, timeout=10)
+    spot = resp2.json()
+    for bal in spot.get("balances", []):
+        if bal["coin"] == "USDC":
+            return float(bal["total"])
+    return 0.0
+
+
 # --- Global State ---
 active_positions: list[BasisPosition] = []
 peak_equity: float = 0
@@ -199,35 +227,43 @@ async def run_emergency_checks(
     info: Info,
     exchange: Exchange,
     vault_address: str | None,
+    api_url: str = "",
 ) -> bool:
     """Run health and drawdown checks. Returns True if emergency triggered."""
     global peak_equity, active_positions, current_signals
 
     user_addr = vault_address or exchange.wallet.address
-    user_state = info.user_state(user_addr)
-    health = compute_health_state(user_state)
 
-    if health.action != "none":
-        print(
-            f"HEALTH {health.status.upper()}: ratio={health.margin_ratio:.3f} "
-            f"equity=${health.total_equity:.2f} pnl=${health.unrealized_pnl:.2f}"
-        )
+    # Health check only applies when we have active perp positions
+    if active_positions:
+        import requests as _req
+        resp = _req.post(f"{api_url}/info", json={
+            "type": "clearinghouseState", "user": user_addr
+        }, timeout=10)
+        user_state = resp.json()
+        health = compute_health_state(user_state)
 
-        if health.action == "close_all":
-            print("EMERGENCY: Closing all positions — health critical")
-            for pos in reversed(active_positions):
-                await close_basis_position(exchange, info, pos.market, vault_address)
-            active_positions.clear()
-            return True
+        if health.action != "none":
+            print(
+                f"HEALTH {health.status.upper()}: ratio={health.margin_ratio:.3f} "
+                f"equity=${health.total_equity:.2f} pnl=${health.unrealized_pnl:.2f}"
+            )
 
-        if health.action == "reduce" and active_positions:
-            print("WARNING: Reducing positions — health declining")
-            largest = max(active_positions, key=lambda p: p.size_usd)
-            await close_basis_position(exchange, info, largest.market, vault_address)
-            active_positions.remove(largest)
+            if health.action == "close_all":
+                print("EMERGENCY: Closing all positions — health critical")
+                for pos in reversed(active_positions):
+                    await close_basis_position(exchange, info, pos.market, vault_address)
+                active_positions.clear()
+                return True
+
+            if health.action == "reduce" and active_positions:
+                print("WARNING: Reducing positions — health declining")
+                largest = max(active_positions, key=lambda p: p.size_usd)
+                await close_basis_position(exchange, info, largest.market, vault_address)
+                active_positions.remove(largest)
 
     # Drawdown check
-    equity = health.total_equity
+    equity = get_equity(info, exchange, vault_address, api_url)
     if equity < 0:
         print(f"CRITICAL: Negative equity detected (${equity:.2f}) — closing all")
         for pos in reversed(active_positions):
@@ -332,9 +368,7 @@ async def run_rebalance(
     # 2. Compute target allocations
     ranked = [m for m in rank_markets_by_funding(rates) if passes_cost_gate(m.annualized_pct * 100)]
 
-    user_addr = vault_address or exchange.wallet.address
-    user_state = info.user_state(user_addr)
-    total_equity = float(user_state.get("marginSummary", {}).get("accountValue", "0"))
+    total_equity = get_equity(info, exchange, vault_address, api_url)
 
     deployable_equity = total_equity * (deployment_pct / 100)
 
@@ -451,7 +485,7 @@ async def main() -> None:
         # Emergency checks (every 30s)
         if now_ms - last_emergency_check * 1000 >= STRATEGY_CONFIG["emergency_check_interval_ms"]:
             try:
-                emergency = await run_emergency_checks(info, exchange, vault_address)
+                emergency = await run_emergency_checks(info, exchange, vault_address, api_url)
                 if emergency:
                     print("Emergency triggered — pausing rebalance for 5 minutes")
                     last_rebalance = now
@@ -499,9 +533,7 @@ async def main() -> None:
             pass
 
         # Heartbeat
-        user_addr = vault_address or exchange.wallet.address
-        user_state = info.user_state(user_addr)
-        equity = float(user_state.get("marginSummary", {}).get("accountValue", "0"))
+        equity = get_equity(info, exchange, vault_address, api_url)
 
         severity_labels = ["CLEAR", "LOW", "HIGH", "CRITICAL"]
         mode = current_regime.rebalance_mode if current_regime else "?"
