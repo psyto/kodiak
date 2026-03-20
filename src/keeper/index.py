@@ -271,7 +271,10 @@ async def run_emergency_checks(
         active_positions.clear()
         return True
 
-    if equity > peak_equity:
+    # Reset peak when no positions (avoids stale peak from inflated margin readings)
+    if not active_positions:
+        peak_equity = equity
+    elif equity > peak_equity:
         peak_equity = equity
 
     drawdown = compute_drawdown(equity, peak_equity)
