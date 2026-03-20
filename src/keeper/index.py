@@ -537,12 +537,14 @@ async def main() -> None:
         # Signal detection (every 5 min)
         if now_ms - last_signal_detection * 1000 >= STRATEGY_CONFIG["signal_detection_interval_ms"]:
             emergency_rebalance = await run_signal_detection(api_url)
-            if emergency_rebalance:
+            if emergency_rebalance and active_positions:
                 try:
                     await run_rebalance(exchange, info, vault_address, api_url)
                 except Exception as err:
                     print(f"Emergency rebalance error: {err}")
                 last_rebalance = now
+            elif emergency_rebalance:
+                print("Regime shift detected but no positions to rebalance — skipping")
             last_signal_detection = now
 
         # Leverage + imbalance update (every 30 min)

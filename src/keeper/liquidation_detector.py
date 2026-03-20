@@ -150,8 +150,9 @@ def update_liquidation_state(
         direction_bias = "balanced"
 
     # Cascade detection: is intensity accelerating?
-    prev = _prev_intensity.get(coin, 0)
-    is_cascade = intensity > prev * 1.5 and intensity > 1000  # >50% increase and >$1k/min
+    # Require sustained high intensity AND acceleration (not just a single spike)
+    prev = _prev_intensity.get(coin, intensity)  # Default to current (no spike on first run)
+    is_cascade = intensity > prev * 2.0 and intensity > 5000  # >100% increase and >$5k/min
     _prev_intensity[coin] = intensity
 
     # Severity classification
