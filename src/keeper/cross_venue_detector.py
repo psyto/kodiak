@@ -35,6 +35,23 @@ class VenueFunding:
     spread_annualized: float   # Annualized spread %
     convergence_signal: str    # "hl_high" | "hl_low" | "aligned" | "no_data"
     confidence: float          # 0-100
+    # CEX OI data
+    binance_oi: float = 0.0    # Binance open interest (USD)
+    bybit_oi: float = 0.0      # Bybit open interest (USD)
+    oi_signal: str = "no_data" # "oi_surge" | "oi_drop" | "stable" | "no_data"
+
+
+# Track previous OI for change detection
+_previous_oi: dict[str, dict[str, float]] = {}
+
+
+# Map HL coins to CEX symbols
+_COIN_TO_CEX = {
+    "BTC": {"binance": "BTCUSDT", "bybit": "BTCUSDT"},
+    "ETH": {"binance": "ETHUSDT", "bybit": "ETHUSDT"},
+    "SOL": {"binance": "SOLUSDT", "bybit": "SOLUSDT"},
+    "HYPE": {"binance": None, "bybit": None},
+}
 
 
 def _normalize_to_hourly(rate: float, interval_hours: int) -> float:
@@ -42,6 +59,91 @@ def _normalize_to_hourly(rate: float, interval_hours: int) -> float:
     if interval_hours <= 0:
         return 0.0
     return rate / interval_hours
+
+
+def _fetch_binance_oi(coins: list[str]) -> dict[str, float]:
+    """Fetch Binance open interest in USD for monitored coins."""
+    result = {}
+    for coin in coins:
+        mapping = _COIN_TO_CEX.get(coin, {})
+        symbol = mapping.get("binance") if mapping else None
+        if not symbol:
+            continue
+        try:
+            resp = requests.get(
+                f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}",
+                timeout=5,
+            )
+            if resp.status_code != 200:
+                continue
+            oi_data = resp.json()
+            # Get price to convert to USD
+            price_resp = requests.get(
+                f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}",
+                timeout=5,
+            )
+            if price_resp.status_code == 200:
+                price = float(price_resp.json().get("price", 0))
+                result[coin] = float(oi_data.get("openInterest", 0)) * price
+        except Exception:
+            pass
+    return result
+
+
+def _fetch_bybit_oi(coins: list[str]) -> dict[str, float]:
+    """Fetch Bybit open interest in USD for monitored coins."""
+    result = {}
+    for coin in coins:
+        mapping = _COIN_TO_CEX.get(coin, {})
+        symbol = mapping.get("bybit") if mapping else None
+        if not symbol:
+            continue
+        try:
+            resp = requests.get(
+                f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol}&intervalTime=1h&limit=1",
+                timeout=5,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            oi_entry = (data.get("result", {}).get("list") or [{}])[0]
+            oi_base = float(oi_entry.get("openInterest", 0))
+            # Get price
+            ticker_resp = requests.get(
+                f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}",
+                timeout=5,
+            )
+            if ticker_resp.status_code == 200:
+                ticker_data = ticker_resp.json()
+                price = float((ticker_data.get("result", {}).get("list") or [{}])[0].get("lastPrice", 0))
+                result[coin] = oi_base * price
+        except Exception:
+            pass
+    return result
+
+
+def _classify_oi_signal(coin: str, binance_oi: float, bybit_oi: float) -> str:
+    """Classify OI change as surge, drop, or stable."""
+    global _previous_oi
+    total_oi = binance_oi + bybit_oi
+
+    prev = _previous_oi.get(coin)
+    _previous_oi[coin] = {"binance": binance_oi, "bybit": bybit_oi}
+
+    if not prev or total_oi == 0:
+        return "no_data"
+
+    prev_total = prev.get("binance", 0) + prev.get("bybit", 0)
+    if prev_total == 0:
+        return "no_data"
+
+    change_pct = ((total_oi - prev_total) / prev_total) * 100
+
+    if change_pct > 10:
+        return "oi_surge"
+    if change_pct < -10:
+        return "oi_drop"
+    return "stable"
 
 
 def fetch_cross_venue_funding(api_url: str = HL_MAINNET_API) -> list[VenueFunding]:
@@ -56,6 +158,10 @@ def fetch_cross_venue_funding(api_url: str = HL_MAINNET_API) -> list[VenueFundin
 
     allowed = STRATEGY_CONFIG["allowed_markets"]
     results = []
+
+    # Fetch CEX OI data
+    binance_oi_map = _fetch_binance_oi(allowed)
+    bybit_oi_map = _fetch_bybit_oi(allowed)
 
     for entry in data:
         if not isinstance(entry, list) or len(entry) < 2:
@@ -138,6 +244,11 @@ def fetch_cross_venue_funding(api_url: str = HL_MAINNET_API) -> list[VenueFundin
             else:
                 confidence = 20.0  # Mixed signals
 
+        # CEX OI
+        b_oi = binance_oi_map.get(coin, 0.0)
+        by_oi = bybit_oi_map.get(coin, 0.0)
+        oi_sig = _classify_oi_signal(coin, b_oi, by_oi)
+
         results.append(VenueFunding(
             coin=coin,
             hl_rate=hl_rate,
@@ -150,6 +261,9 @@ def fetch_cross_venue_funding(api_url: str = HL_MAINNET_API) -> list[VenueFundin
             spread_annualized=spread_annualized,
             convergence_signal=signal,
             confidence=confidence,
+            binance_oi=b_oi,
+            bybit_oi=by_oi,
+            oi_signal=oi_sig,
         ))
 
     return results
@@ -214,7 +328,10 @@ def format_cross_venue(venues: list[VenueFunding]) -> str:
         bin_str = f"Bin={v.binance_annualized:+.1f}%" if v.binance_rate else "Bin=N/A"
         byb_str = f"Byb={v.bybit_annualized:+.1f}%" if v.bybit_rate else "Byb=N/A"
         spread_str = f"spread={v.spread_annualized:+.1f}%"
+        oi_total = v.binance_oi + v.bybit_oi
+        oi_str = f" | OI: ${oi_total / 1e6:.1f}M" if oi_total > 0 else ""
+        oi_flag = f" [{v.oi_signal}]" if v.oi_signal not in ("stable", "no_data") else ""
         lines.append(
-            f"  {v.coin}: {hl_str} | {bin_str} | {byb_str} | {spread_str} → {v.convergence_signal} ({v.confidence:.0f}%)"
+            f"  {v.coin}: {hl_str} | {bin_str} | {byb_str} | {spread_str} → {v.convergence_signal} ({v.confidence:.0f}%){oi_str}{oi_flag}"
         )
     return "\n".join(lines)
