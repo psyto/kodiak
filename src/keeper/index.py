@@ -193,8 +193,21 @@ async def run_signal_detection(api_url: str) -> bool:
         liq_result = detect_liquidations(api_url=api_url)
         print(format_liquidation_state(liq_result))
 
-        # Combine signal severity with liquidation severity (take max)
-        effective_severity = max(current_signals.severity, liq_result["max_severity"])
+        # Combine signal severity with liquidation severity.
+        # Real liquidation data (zero-hash) supersedes the OI-drop proxy in
+        # signal_detector since they measure the same phenomenon. When the real
+        # liquidation detector has data, use it instead of double-counting.
+        signal_severity_no_oi_proxy = max(
+            (e.severity for e in current_signals.events if e.dimension != "liquidation_cascade"),
+            default=SIGNAL_NONE,
+        )
+        if liq_result["max_severity"] > SIGNAL_NONE:
+            # Real liquidation data available — use it, skip OI-drop proxy
+            effective_severity = max(signal_severity_no_oi_proxy, liq_result["max_severity"])
+        else:
+            # No real liquidation data — fall back to full signal detector (including OI proxy)
+            effective_severity = current_signals.severity
+
         if liq_result["cascade_detected"]:
             effective_severity = max(effective_severity, SIGNAL_CRITICAL)
             print("LIQUIDATION CASCADE: Escalating to CRITICAL")
