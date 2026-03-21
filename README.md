@@ -97,7 +97,7 @@ USDC Deposit --> Hyperliquid Vault
 
 | Module | File | Purpose |
 |--------|------|---------|
-| Signal Detector | `src/keeper/signal_detector.py` | 4-dimension anomaly detection (OI shift, funding vol, spread, OI drop) |
+| Signal Detector | `src/keeper/signal_detector.py` | 4-dimension anomaly detection (OI shift, funding vol, spread, OI drop proxy) |
 | Liquidation Detector | `src/keeper/liquidation_detector.py` | **[HL-specific]** Real liquidation tracking via zero-hash trades, cascade detection |
 | Cross-Venue Detector | `src/keeper/cross_venue_detector.py` | **[HL-specific]** HL vs Binance vs Bybit funding rate comparison |
 | Funding Pre-Positioning | `src/keeper/funding_preposition.py` | **[HL-specific]** Pre-position before hourly funding settlement |
@@ -122,7 +122,8 @@ Instead of proxying liquidations from OI drop (like Yogi on Drift), Kodiak detec
 - **Liquidation volume tracking** — USD amount liquidated per market per rolling window
 - **Intensity measurement** — USD/min liquidation rate for severity classification
 - **Direction bias** — whether longs or shorts are getting squeezed
-- **Cascade detection** — accelerating liquidation rate (>50% increase) triggers CRITICAL
+- **Cascade detection** — accelerating liquidation rate (>100% increase and >$5k/min) triggers CRITICAL
+- **Autocorrelation-aware** — when real liquidation data is available, the OI-drop proxy from the signal detector is excluded to prevent double-counting
 
 First live result: Caught a HYPE short squeeze ($18,264 in 5 min, 9 events, $3,653/min) and correctly escalated to CRITICAL, switching the regime to defensive mode.
 
@@ -279,7 +280,7 @@ Keeper (EC2, 24/7)
 - **Trading**: [Hyperliquid](https://hyperliquid.xyz) — perpetual futures execution via agent wallet delegation
 - **Keeper**: Python bot on AWS EC2 with pm2 process management
 - **SDK**: [hyperliquid-python-sdk](https://github.com/hyperliquid-dex/hyperliquid-python-sdk) (official)
-- **Signal detection**: 4-dimension anomaly detector with configurable thresholds
+- **Signal detection**: 6-dimension anomaly detector (4 base + real liquidation + cross-venue), autocorrelation-aware
 - **Vol computation**: Parkinson estimator on BTC hourly candles
 - **Data feed**: Hyperliquid REST API + WebSocket
 

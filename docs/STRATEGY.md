@@ -4,7 +4,7 @@
 
 Hyperliquid's deep orderbook and high-leverage environment (up to 50x) creates structural inefficiencies — funding rate dislocations, mark/oracle premium, and aggressive liquidation cascades — that mean-revert predictably. Traditional basis vaults capture these with funding rate harvesting. Kodiak adds a second dimension: **forward-looking anomaly detection** that senses market stress before vol-based indicators react.
 
-**Core insight**: Vol-based leverage scaling is reactive — it reduces exposure *after* volatility has already spiked. By then, slippage is high, liquidity is thin, and drawdowns have already occurred. Kodiak's signal detector monitors leading indicators (OI shifts, liquidation cascades, funding instability, spread blow-outs) that precede vol spikes, enabling proactive position reduction.
+**Core insight**: Vol-based leverage scaling is reactive — it reduces exposure *after* volatility has already spiked. By then, slippage is high, liquidity is thin, and drawdowns have already occurred. Kodiak's signal detector monitors six dimensions — including real liquidation events and cross-venue funding divergence — that precede vol spikes, enabling proactive position reduction.
 
 **Revenue sources**: Funding payments + mark/oracle premium convergence + maker execution advantage. Three sources active across all market conditions, with deployment scaled by regime intelligence.
 
@@ -26,7 +26,8 @@ Total Capital
              |   |   2. Liquidation cascade (OI drop proxy)
              |   |   3. Funding rate volatility (regime transition)
              |   |   4. Spread blow-out (mark/oracle stress)
-             |   +-- Max severity across dimensions = aggregate signal
+             |   +-- Autocorrelation-aware: real liquidation data supersedes OI-drop proxy
+             |   +-- Max severity across non-correlated dimensions = aggregate signal
              |   --> CLEAR (0) / LOW (1) / HIGH (2) / CRITICAL (3)
              |
              +-- Regime Engine
@@ -301,7 +302,8 @@ At higher volume tiers, maker fees drop further (0% at >$500M 14-day volume) wit
 1. **OI imbalance estimation** — Hyperliquid does not expose long/short OI split directly. We estimate imbalance from funding rate direction and magnitude. This is a proxy, not ground truth. The real liquidation detector partially compensates by providing actual direction bias data.
 2. **No lending floor** — Unlike Yogi which earns 1.5-6.5% APY on idle capital via Kamino/Marginfi, Kodiak's idle USDC earns nothing. Capital efficiency depends entirely on perp deployment.
 3. **Signal detection building track record** — The anomaly detector is adapted from Yogi's Drift-tuned thresholds. Hyperliquid's different microstructure may require threshold adjustments after live observation. Liquidation thresholds (USD/min) are initial estimates and may need calibration.
-4. **Regime matrices are manually tuned** — The 5x4 deployment/leverage matrices were designed from first principles, not optimized from Hyperliquid historical data.
+4. **Regime matrices are manually tuned** — The 5x4 deployment/leverage matrices were designed from first principles, not optimized from Hyperliquid historical data. Adaptive thresholds based on rolling volatility are planned for when capital scales beyond $5K.
+5. **Single keeper SPOF** — A single Python process on EC2 handles all decisions. The dead man's switch (`scheduleCancel`) provides safety if the keeper goes offline, but multi-node redundancy is not yet implemented.
 5. **Single-keeper architecture** — No multi-reporter consensus. The keeper is a single point of trust, mitigated by the dead man's switch.
 6. **Unified account mode** — Hyperliquid's unified account mode shares collateral between spot and perp. Equity calculation must sum both to avoid false drawdown triggers.
 7. **Cross-venue data availability** — Some coins (e.g., HYPE) have no Binance/Bybit listing, so cross-venue comparison is unavailable. The system falls back to HL-only signals for these markets.
