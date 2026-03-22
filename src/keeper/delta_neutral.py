@@ -34,11 +34,10 @@ MARGIN_RATIO = 0.30  # 30% for perp margin
 
 # Map perp coin names to spot pair names on Hyperliquid
 # Perp uses "HYPE" (asset 159), Spot uses "HYPE/USDC" (asset 10107)
+# Only HYPE has a liquid spot/USDC pair on Hyperliquid.
+# BTC/ETH/SOL don't have direct spot pairs — DN only works for HYPE.
 PERP_TO_SPOT = {
     "HYPE": "HYPE/USDC",
-    "BTC": "BTC/USDC",
-    "ETH": "ETH/USDC",
-    "SOL": "SOL/USDC",
 }
 
 
