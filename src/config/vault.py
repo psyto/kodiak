@@ -138,4 +138,13 @@ STRATEGY_CONFIG = {
     # Funding pre-positioning
     "preposition_window_seconds": 600,    # Enter 10 min before settlement
     "preposition_min_rate_apy": 5.0,      # Minimum rate (APY) to justify pre-positioning
+
+    # --- DELTA-NEUTRAL MODE ---
+    # When enabled, opens spot + perp hedge instead of directional shorts.
+    # Eliminates price risk, collects pure funding yield.
+    "delta_neutral_mode": True,
+    "dn_spot_ratio": 0.70,         # 70% to spot buy
+    "dn_margin_ratio": 0.30,       # 30% for perp margin
+    "dn_max_delta_drift_pct": 5.0, # Rebalance if delta drifts >5%
+    "dn_min_funding_apy": 5.0,     # Minimum funding APY to open DN position
 }

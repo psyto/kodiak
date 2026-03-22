@@ -76,6 +76,13 @@ from src.keeper.funding_preposition import (
     evaluate_all_settlements,
     format_settlements,
 )
+from src.keeper.delta_neutral import (
+    DeltaNeutralPosition,
+    open_delta_neutral,
+    close_delta_neutral,
+    check_delta_drift,
+    format_dn_position,
+)
 
 
 def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_url: str) -> float:
@@ -108,6 +115,7 @@ def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_ur
 
 # --- Global State ---
 active_positions: list[BasisPosition] = []
+dn_positions: list[DeltaNeutralPosition] = []  # Delta-neutral positions
 peak_equity: float = 0
 current_leverage: LeverageState | None = None
 latest_imbalances: list[MarketImbalance] = []
@@ -270,12 +278,14 @@ async def run_emergency_checks(
     api_url: str = "",
 ) -> bool:
     """Run health and drawdown checks. Returns True if emergency triggered."""
-    global peak_equity, active_positions, current_signals
+    global peak_equity, active_positions, dn_positions, current_signals
 
     user_addr = vault_address or exchange.wallet.address
 
-    # Health check only applies when we have active perp positions
-    if active_positions:
+    has_positions = active_positions or dn_positions
+
+    # Health check only applies when we have active positions
+    if has_positions:
         import requests as _req
         resp = _req.post(f"{api_url}/info", json={
             "type": "clearinghouseState", "user": user_addr
@@ -366,6 +376,100 @@ async def run_funding_scan(api_url: str) -> None:
         )
 
 
+async def run_dn_rebalance(
+    exchange: Exchange,
+    info: Info,
+    vault_address: str | None,
+    api_url: str,
+) -> None:
+    """Run delta-neutral rebalance cycle."""
+    global dn_positions
+    print("\n--- Rebalance Cycle (DELTA-NEUTRAL) ---")
+
+    effective_leverage = (
+        current_regime.max_leverage
+        if current_regime
+        else (current_leverage.target_leverage if current_leverage else 0)
+    )
+    deployment_pct = current_regime.deployment_pct if current_regime else 100
+
+    # Close all if regime says zero
+    if effective_leverage == 0 or deployment_pct == 0:
+        mode = current_regime.rebalance_mode if current_regime else "unknown"
+        print(f"Regime: {mode} — closing all DN positions")
+        for pos in list(dn_positions):
+            await close_delta_neutral(exchange, info, pos, vault_address)
+        dn_positions.clear()
+        return
+
+    total_equity = get_equity(info, exchange, vault_address, api_url)
+    deployable = total_equity * (deployment_pct / 100)
+    mode = current_regime.rebalance_mode if current_regime else "unknown"
+
+    print(f"Equity: ${total_equity:.2f} | Deployable: ${deployable:.2f} ({deployment_pct}%) | Mode: {mode}")
+
+    # Check existing DN positions for exit signals (funding flipped)
+    rates = fetch_all_funding_rates(api_url)
+    rate_map = {r.market: r for r in rates}
+    min_apy = STRATEGY_CONFIG.get("dn_min_funding_apy", 5.0)
+
+    for pos in list(dn_positions):
+        rate = rate_map.get(pos.coin)
+        if rate and rate.annualized_pct < min_apy:
+            print(f"Closing DN {pos.coin}: funding {rate.annualized_pct:.1f}% below {min_apy}% threshold")
+            await close_delta_neutral(exchange, info, pos, vault_address)
+            dn_positions.remove(pos)
+
+    # Check delta drift on remaining positions
+    user_addr = vault_address or exchange.wallet.address
+    for pos in dn_positions:
+        drift = check_delta_drift(pos, info, user_addr, api_url)
+        if drift["drifted"]:
+            print(f"Delta drift on {pos.coin}: {drift['delta_pct']:.1f}% (spot={drift['spot']:.4f} perp={drift['perp']:.4f})")
+
+    # Find best market for new DN position
+    active_coins = {p.coin for p in dn_positions}
+    ranked = [r for r in rank_markets_by_funding(rates) if r.annualized_pct >= min_apy]
+
+    if not ranked:
+        print("No markets above minimum funding threshold for DN")
+        return
+
+    # Only open 1 DN position at a time (concentrate capital)
+    if dn_positions:
+        # Already have a position — check if there's a much better one
+        current_best = dn_positions[0]
+        current_rate = rate_map.get(current_best.coin)
+        new_best = ranked[0] if ranked else None
+
+        if new_best and current_rate:
+            # Rotate if new market has >2x the funding
+            if new_best.market not in active_coins and new_best.annualized_pct > current_rate.annualized_pct * 2:
+                print(f"Rotating: {current_best.coin} ({current_rate.annualized_pct:.1f}%) -> {new_best.market} ({new_best.annualized_pct:.1f}%)")
+                await close_delta_neutral(exchange, info, current_best, vault_address)
+                dn_positions.remove(current_best)
+            else:
+                # Log current position
+                mid = float(info.all_mids().get(current_best.coin, 0))
+                print(f"Holding: {format_dn_position(current_best, mid)}")
+                return
+
+    # Open new DN position on best market
+    best = ranked[0]
+    if best.market in active_coins:
+        return
+
+    capital_for_dn = deployable  # All deployable capital to one DN position
+    print(f"Best market: {best.market} at {best.annualized_pct:.1f}% APY")
+
+    pos = await open_delta_neutral(
+        exchange, info, best.market, capital_for_dn, vault_address, api_url
+    )
+    if pos:
+        pos.entry_funding_rate = best.rate_hourly
+        dn_positions.append(pos)
+
+
 async def run_rebalance(
     exchange: Exchange,
     info: Info,
@@ -374,6 +478,12 @@ async def run_rebalance(
 ) -> None:
     """Run the rebalance cycle."""
     global active_positions
+
+    # Delta-neutral mode
+    if STRATEGY_CONFIG.get("delta_neutral_mode", False):
+        await run_dn_rebalance(exchange, info, vault_address, api_url)
+        return
+
     print("\n--- Rebalance Cycle ---")
 
     effective_leverage = (
@@ -621,9 +731,11 @@ async def main() -> None:
             (STRATEGY_CONFIG["rebalance_interval_ms"] - (now_ms - last_rebalance * 1000)) / 60000
         )
 
+        pos_count = len(dn_positions) if STRATEGY_CONFIG.get("delta_neutral_mode") else len(active_positions)
+        dn_tag = " [DN]" if STRATEGY_CONFIG.get("delta_neutral_mode") else ""
         print(
-            f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] "
-            f"Positions: {len(active_positions)} | "
+            f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}]{dn_tag} "
+            f"Positions: {pos_count} | "
             f"Equity: ${equity:.2f} | "
             f"Regime: {mode} ({deploy}% @ {lev}x) | "
             f"Signal: {signal_label} | "
