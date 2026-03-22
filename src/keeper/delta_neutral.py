@@ -32,6 +32,15 @@ from src.config.vault import STRATEGY_CONFIG
 SPOT_RATIO = 0.70   # 70% to spot
 MARGIN_RATIO = 0.30  # 30% for perp margin
 
+# Map perp coin names to spot pair names on Hyperliquid
+# Perp uses "HYPE" (asset 159), Spot uses "HYPE/USDC" (asset 10107)
+PERP_TO_SPOT = {
+    "HYPE": "HYPE/USDC",
+    "BTC": "BTC/USDC",
+    "ETH": "ETH/USDC",
+    "SOL": "SOL/USDC",
+}
+
 
 @dataclass
 class DeltaNeutralPosition:
@@ -160,18 +169,24 @@ async def open_delta_neutral(
     print(f"Spot notional: ${spot_notional:.2f} | Perp notional: ${perp_notional:.2f}")
 
     # Step 1: Buy spot
-    # Spot orders use the coin name with @index format on HL
+    # IMPORTANT: On Hyperliquid, perp uses coin name ("HYPE") but spot uses
+    # pair name ("HYPE/USDC"). Using just "HYPE" opens a perp long, not spot.
+    spot_symbol = PERP_TO_SPOT.get(coin)
+    if not spot_symbol:
+        print(f"No spot pair mapping for {coin}")
+        return None
+
     try:
         # Use limit order slightly above mid for immediate fill
         spot_price = round(mid_price * 1.001, 2 if mid_price < 100 else 0)
         spot_result = exchange.order(
-            name=f"{coin}",
+            name=spot_symbol,
             is_buy=True,
             sz=spot_size_coins,
             limit_px=spot_price,
             order_type={"limit": {"tif": "Ioc"}},  # Immediate-or-cancel for fast fill
         )
-        print(f"Spot BUY: {spot_size_coins} {coin} @ ${spot_price} | {spot_result}")
+        print(f"Spot BUY: {spot_size_coins} {spot_symbol} @ ${spot_price} | {spot_result}")
 
         # Check if spot order filled
         status = spot_result.get("response", {}).get("data", {}).get("statuses", [{}])
@@ -202,7 +217,7 @@ async def open_delta_neutral(
             print("Unwinding spot position...")
             try:
                 exchange.order(
-                    name=f"{coin}",
+                    name=spot_symbol,
                     is_buy=False,
                     sz=spot_size_coins,
                     limit_px=round(mid_price * 0.999, 2 if mid_price < 100 else 0),
@@ -218,7 +233,7 @@ async def open_delta_neutral(
         print("Unwinding spot position...")
         try:
             exchange.order(
-                name=f"{coin}",
+                name=spot_symbol,
                 is_buy=False,
                 sz=spot_size_coins,
                 limit_px=round(mid_price * 0.999, 2 if mid_price < 100 else 0),
@@ -265,19 +280,20 @@ async def close_delta_neutral(
         success = False
 
     # Step 2: Sell spot
+    spot_symbol = PERP_TO_SPOT.get(coin, f"{coin}/USDC")
     try:
         all_mids = info.all_mids()
         mid_price = float(all_mids.get(coin, 0))
         sell_price = round(mid_price * 0.999, 2 if mid_price < 100 else 0)
 
         spot_result = exchange.order(
-            name=f"{coin}",
+            name=spot_symbol,
             is_buy=False,
             sz=position.spot_size,
             limit_px=sell_price,
             order_type={"limit": {"tif": "Ioc"}},
         )
-        print(f"Spot SELL: {position.spot_size} {coin} @ ${sell_price} | {spot_result}")
+        print(f"Spot SELL: {position.spot_size} {spot_symbol} @ ${sell_price} | {spot_result}")
     except Exception as e:
         print(f"Spot sell failed: {e}")
         success = False
