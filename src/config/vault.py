@@ -103,11 +103,14 @@ STRATEGY_CONFIG = {
 
     # Regime deployment matrix: vol_regime × signal_severity → % capital deployed
     # [NONE, LOW, HIGH, CRITICAL]
+    # Loosened for delta-neutral mode: price risk is zero, so higher
+    # deployment is safe. Only risk is unwinding larger positions if
+    # funding flips — mitigated by 5-min signal detection.
     "deployment_matrix": {
-        "veryLow": [100, 80, 50, 25],
-        "low":     [85,  70, 40, 20],
-        "normal":  [70,  55, 30, 15],
-        "high":    [50,  35, 20, 10],
+        "veryLow": [100, 95, 70, 40],
+        "low":     [95,  85, 55, 30],
+        "normal":  [90,  75, 45, 20],
+        "high":    [70,  50, 30, 15],
         "extreme": [0,   0,  0,  0],
     },
 
