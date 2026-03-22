@@ -621,6 +621,101 @@ async def run_rebalance(
             print(f"Failed to open position on {market}: {err}")
 
 
+def load_existing_positions(
+    info: Info, exchange: Exchange, vault_address: str | None, api_url: str
+) -> None:
+    """
+    Load existing on-chain positions into in-memory state on startup.
+    Prevents duplicate position opening after keeper restart.
+    """
+    global active_positions, dn_positions
+    import requests as _req
+
+    user_addr = vault_address or exchange.wallet.address
+    print("--- Loading Existing On-Chain Positions ---")
+
+    # Load perp positions
+    resp = _req.post(f"{api_url}/info", json={
+        "type": "clearinghouseState", "user": user_addr
+    }, timeout=10)
+    state = resp.json()
+
+    perp_positions = {}
+    for pos_wrapper in state.get("assetPositions", []):
+        pos = pos_wrapper.get("position", {})
+        szi = float(pos.get("szi", "0"))
+        coin = pos.get("coin", "")
+        if szi != 0:
+            perp_positions[coin] = szi
+            print(f"  Perp: {coin} size={szi} entryPx={pos.get('entryPx')}")
+
+    # Load spot positions
+    resp2 = _req.post(f"{api_url}/info", json={
+        "type": "spotClearinghouseState", "user": user_addr
+    }, timeout=10)
+    spot_state = resp2.json()
+
+    spot_positions = {}
+    for b in spot_state.get("balances", []):
+        coin = b.get("coin", "")
+        total = float(b.get("total", 0))
+        if total > 0.001 and coin != "USDC":
+            spot_positions[coin] = total
+            print(f"  Spot: {coin} balance={total}")
+
+    if not perp_positions and not spot_positions:
+        print("  No existing positions found.")
+        return
+
+    # Reconstruct DN positions (where we have both spot and perp on same asset)
+    if STRATEGY_CONFIG.get("delta_neutral_mode", False):
+        for coin, spot_size in spot_positions.items():
+            perp_size = abs(perp_positions.get(coin, 0))
+            if perp_size > 0:
+                # Found matching spot + perp = DN position
+                mid = float(info.all_mids().get(coin, 0))
+                tilt_pct = (perp_size - spot_size) / spot_size if spot_size > 0 else 0
+                dn_pos = DeltaNeutralPosition(
+                    coin=coin,
+                    spot_size=spot_size,
+                    perp_size=perp_size,
+                    spot_entry_price=mid,
+                    perp_entry_price=mid,
+                    entry_funding_rate=0,
+                    entry_timestamp=time.time(),
+                    tilt_pct=max(0, tilt_pct),
+                )
+                dn_positions.append(dn_pos)
+                print(f"  Restored DN: {coin} spot={spot_size:.4f} perp={perp_size:.4f} delta={dn_pos.delta:.4f} ({dn_pos.delta_pct:.1f}%)")
+                # Remove from perp_positions so we don't double-count
+                del perp_positions[coin]
+
+        # Remaining unmatched perps = directional positions (shouldn't exist in DN mode)
+        for coin, szi in perp_positions.items():
+            print(f"  WARNING: Unmatched perp {coin} size={szi} — closing to avoid unhedged exposure")
+            try:
+                exchange.market_close(coin=coin)
+                print(f"  Closed {coin}")
+            except Exception as e:
+                print(f"  Failed to close {coin}: {e}")
+    else:
+        # Directional mode — load perps as active_positions
+        for coin, szi in perp_positions.items():
+            direction = "short" if szi < 0 else "long"
+            mid = float(info.all_mids().get(coin, 0))
+            active_positions.append(BasisPosition(
+                market=coin,
+                direction=direction,
+                size_usd=abs(szi) * mid,
+                size_coin=abs(szi),
+                entry_funding_rate=0,
+                entry_timestamp=time.time(),
+            ))
+            print(f"  Restored: {coin} {direction} size={abs(szi)}")
+
+    print(f"  Loaded: {len(dn_positions)} DN + {len(active_positions)} directional positions\n")
+
+
 async def main() -> None:
     """Kodiak keeper main loop."""
     load_dotenv()
@@ -637,6 +732,12 @@ async def main() -> None:
     print(f"Network: {network}")
     print(f"API: {api_url}")
     print("Connected.\n")
+
+    # Load existing on-chain positions to prevent duplicates after restart
+    try:
+        load_existing_positions(info, exchange, vault_address, api_url)
+    except Exception as e:
+        print(f"Warning: Failed to load existing positions: {e}")
 
     # Set up dead man's switch (auto-cancel orders if keeper goes offline)
     # HL supports scheduleCancel — cancel all orders if no heartbeat for N seconds
