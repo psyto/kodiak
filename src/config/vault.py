@@ -150,4 +150,5 @@ STRATEGY_CONFIG = {
     "dn_margin_ratio": 0.30,       # 30% for perp margin
     "dn_max_delta_drift_pct": 5.0, # Rebalance if delta drifts >5%
     "dn_min_funding_apy": 5.0,     # Minimum funding APY to open DN position
+    "dn_tilt_pct": 0.10,           # 10% short bias: perp short is 10% larger than spot
 }

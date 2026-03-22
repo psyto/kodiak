@@ -52,11 +52,17 @@ class DeltaNeutralPosition:
     entry_funding_rate: float
     entry_timestamp: float
     cumulative_funding: float = 0.0
+    tilt_pct: float = 0.0     # Short bias: 0.0 = pure DN, 0.1 = 10% extra short
 
     @property
     def delta(self) -> float:
-        """Net exposure: spot - abs(perp). Should be near zero."""
+        """Net exposure: spot - abs(perp). Negative = short bias."""
         return self.spot_size - abs(self.perp_size)
+
+    @property
+    def delta_pct(self) -> float:
+        """Delta as percentage of spot size."""
+        return (self.delta / self.spot_size * 100) if self.spot_size > 0 else 0
 
     @property
     def notional_usd(self) -> float:
@@ -127,9 +133,10 @@ async def open_delta_neutral(
     capital_usd: float,
     vault_address: str = None,
     api_url: str = HL_MAINNET_API,
+    tilt_pct: float = None,
 ) -> Optional[DeltaNeutralPosition]:
     """
-    Open a delta-neutral position: buy spot + short perp.
+    Open a delta-neutral position with optional short tilt.
 
     Args:
         exchange: Hyperliquid Exchange instance
@@ -138,10 +145,14 @@ async def open_delta_neutral(
         capital_usd: Total capital to deploy for this position
         vault_address: Optional vault address
         api_url: API URL
+        tilt_pct: Short bias (0.0 = pure DN, 0.1 = 10% extra short). Defaults to config.
 
     Returns:
         DeltaNeutralPosition or None if failed
     """
+    if tilt_pct is None:
+        tilt_pct = STRATEGY_CONFIG.get("dn_tilt_pct", 0.0)
+
     # Get current price
     all_mids = info.all_mids()
     mid_price = float(all_mids.get(coin, 0))
@@ -157,15 +168,17 @@ async def open_delta_neutral(
         print(f"Spot size too small for {coin}")
         return None
 
-    # Use the same coin size for perp short to maintain delta neutrality
-    perp_size_coins = spot_size_coins
+    # Apply tilt: perp short is larger than spot by tilt_pct
+    # e.g., tilt_pct=0.1 → perp is 10% larger than spot → slight short bias
+    perp_size_coins = _round_size(coin, spot_size_coins * (1 + tilt_pct), info)
 
     spot_notional = spot_size_coins * mid_price
     perp_notional = perp_size_coins * mid_price
+    tilt_label = f" | tilt={tilt_pct*100:.0f}% short bias" if tilt_pct > 0 else ""
 
-    print(f"\n--- Opening Delta-Neutral: {coin} ---")
+    print(f"\n--- Opening Delta-Neutral: {coin}{tilt_label} ---")
     print(f"Capital: ${capital_usd:.2f} (spot: ${spot_capital:.2f}, margin: ${capital_usd - spot_capital:.2f})")
-    print(f"Size: {spot_size_coins} {coin} @ ${mid_price:.2f}")
+    print(f"Spot: {spot_size_coins} {coin} | Perp: {perp_size_coins} {coin} @ ${mid_price:.2f}")
     print(f"Spot notional: ${spot_notional:.2f} | Perp notional: ${perp_notional:.2f}")
 
     # Step 1: Buy spot
@@ -251,9 +264,11 @@ async def open_delta_neutral(
         perp_entry_price=mid_price,
         entry_funding_rate=0,
         entry_timestamp=time.time(),
+        tilt_pct=tilt_pct,
     )
 
-    print(f"Delta-neutral opened: {coin} | delta={position.delta:.4f} | notional=${position.notional_usd:.2f}")
+    tilt_info = f" | tilt={tilt_pct*100:.0f}%" if tilt_pct > 0 else ""
+    print(f"Delta-neutral opened: {coin} | delta={position.delta:.4f} ({position.delta_pct:.1f}%){tilt_info} | notional=${position.notional_usd:.2f}")
     return position
 
 
@@ -364,9 +379,10 @@ def format_dn_position(pos: DeltaNeutralPosition, current_price: float = 0) -> s
     perp_pnl = (pos.perp_entry_price - current_price) * pos.perp_size if current_price else 0
     net_pnl = spot_pnl + perp_pnl
 
+    tilt_info = f" tilt={pos.tilt_pct*100:.0f}%" if pos.tilt_pct > 0 else ""
     return (
         f"{pos.coin} DN: spot={pos.spot_size:.4f} perp={pos.perp_size:.4f} "
-        f"delta={pos.delta:.4f} notional=${pos.notional_usd:.2f} "
-        f"funding=${pos.cumulative_funding:.4f}"
+        f"delta={pos.delta:.4f} ({pos.delta_pct:.1f}%){tilt_info} "
+        f"notional=${pos.notional_usd:.2f} funding=${pos.cumulative_funding:.4f}"
         + (f" netPnL=${net_pnl:.4f}" if current_price else "")
     )
