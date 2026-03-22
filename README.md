@@ -2,28 +2,36 @@
 
 **The biggest bear in the room. Hyperliquid funding rate vault with intelligent signal detection.**
 
-Kodiak is a production-grade USDC vault that combines Hyperliquid perp funding rate arbitrage with a forward-looking anomaly detection engine. Six signal dimensions — OI imbalance shift, real liquidation tracking, funding rate volatility, spread blow-outs, cross-venue funding divergence, and funding pre-positioning — drive a regime engine that adapts deployment and leverage before stress hits. Built on [Yogi](https://github.com/psyto/yogi) (Drift/Solana), extended with Hyperliquid-native intelligence.
+Kodiak is a production-grade USDC vault that combines **delta-neutral funding rate harvesting** with a forward-looking anomaly detection engine on Hyperliquid. Instead of directional perp shorts, Kodiak opens paired spot + perp positions that cancel out price movement — collecting pure funding yield with near-zero price risk. Six signal dimensions drive a regime engine that adapts deployment before stress hits. Built on [Yogi](https://github.com/psyto/yogi) (Drift/Solana), extended with Hyperliquid-native intelligence.
 
 ## Strategy
 
-Kodiak deploys capital into Hyperliquid perp positions to harvest funding rates, with an intelligence layer that dynamically adjusts exposure:
+Kodiak deploys capital into **delta-neutral positions** — buying spot and shorting perps on the same asset — to harvest funding rates with zero price exposure:
 
-1. **Regime-Adaptive Arbitrage (100%)** — Three stacked yield sources:
-   - **Funding rate** — Bidirectional: SHORT when positive, LONG when negative
-   - **Premium convergence** — Mark/oracle deviation mean-reverts
-   - **OI rebalancing** — Position ahead of funding rate changes using imbalance signals
+1. **Delta-Neutral Execution (70/30 split):**
+   - **70% → Spot buy** (e.g., buy 2.94 HYPE at $39.05)
+   - **30% → Perp margin** (short 2.94 HYPE perp at $39.05)
+   - Price movement cancels out. Profit comes purely from funding.
 2. **Intelligence Layer** — Signal detection adjusts how much capital is deployed:
-   - No anomalies: 70-100% deployed at target leverage
-   - Low signals: 55-85% deployed, reduced leverage
-   - Critical signals: 10-25% deployed, minimal leverage
+   - No anomalies: 70-100% deployed
+   - Low signals: 55-85% deployed
+   - Critical signals: 10-25% deployed
    - Extreme vol: 0% deployed, fully idle
+3. **Auto-rotation** — Switches to higher-yielding assets when funding improves by >2x
 
 ### How It Works
 
 ```
 USDC Deposit --> Hyperliquid Vault
                  |
-                 +-- 100% --> Hyperliquid Perps (regime-adaptive arbitrage)
+                 +-- 100% --> Delta-Neutral Engine
+                              |
+                              +-- Delta-Neutral Execution
+                              |   +-- 70% capital --> Buy SPOT asset
+                              |   +-- 30% capital --> Short PERP (same size)
+                              |   +-- Price cancels out. Pure funding yield.
+                              |   +-- Delta drift monitoring (rebalance if >5%)
+                              |   +-- Auto-rotate to highest funding market
                               |
                               +-- Signal Detector (every 5 min)
                               |   +-- OI imbalance shift (mass positioning)
@@ -33,32 +41,20 @@ USDC Deposit --> Hyperliquid Vault
                               |
                               +-- Liquidation Detector (every 5 min) [HL-specific]
                               |   +-- Real liquidation events (zero-hash trades)
-                              |   +-- Liquidation intensity (USD/min)
-                              |   +-- Cascade detection (accelerating rate)
-                              |   +-- Direction bias (long vs short squeezed)
+                              |   +-- Autocorrelation-aware (supersedes OI proxy)
                               |   --> Escalates to CRITICAL on cascade
                               |
-                              +-- Cross-Venue Detector (every 5 min) [HL-specific]
-                              |   +-- HL vs Binance vs Bybit funding rates
-                              |   +-- Detects HL divergence from CEX
+                              +-- Cross-Venue Detector (every 5 min)
+                              |   +-- HL vs Binance vs Bybit funding + OI
                               |   --> Entry direction adjustment
                               |
                               +-- Regime Engine (vol x signal --> deployment)
-                              |   +-- Reads vol regime (Parkinson estimator)
-                              |   +-- Reads signal + liquidation severity (max)
-                              |   --> deploymentPct + maxLeverage + rebalanceMode
+                              |   --> deploymentPct + rebalanceMode
                               |
                               +-- Funding Pre-Positioning [HL-specific]
-                              |   +-- Tracks time to next hourly settlement
                               |   +-- Pre-positions 10 min before settlement
-                              |   +-- Exits positions paying funding before settlement
                               |
-                              +-- Imbalance Detector (premium + funding)
-                              +-- Direction: SHORT or LONG based on composite signal
-                              +-- Cross-venue adjustment on entry direction
-                              +-- Maker limit orders (1.5 bps fee)
                               +-- 30-second health monitoring
-                              +-- Low turnover: 7-day min hold
                               +-- Dead man's switch (auto-cancel if keeper offline)
 ```
 
@@ -76,20 +72,22 @@ USDC Deposit --> Hyperliquid Vault
 | Lending floor | 30% (Kamino/Marginfi) | None (100% to perps) |
 | Markets | SOL, BTC, ETH, DOGE, SUI, AVAX | BTC, ETH, SOL, HYPE |
 | Safety | scheduleCancel not native | Dead man's switch built-in |
+| Execution | Directional perp shorts | **Delta-neutral: spot buy + perp short** |
+| Price risk | Directional (PnL swings) | **Near zero (hedged)** |
 | Liquidation data | OI drop proxy | Real liquidation events (zero-hash trades) |
-| Cross-venue | Not available | HL vs Binance vs Bybit funding comparison |
+| Cross-venue | Drift vs Binance/Bybit | HL vs Binance vs Bybit funding + OI |
 | Funding timing | Continuous (no timing alpha) | Hourly pre-positioning (10 min before settlement) |
 
 ### Yield Stack
 
 | Source | Mechanism | Est. APY Contribution |
 |--------|-----------|----------------------|
-| Funding harvesting | Bidirectional perp positions collect hourly funding | 8-15% |
+| Delta-neutral funding | Spot buy + perp short, collect hourly funding | 8-12% |
 | Funding pre-positioning | Enter before hourly settlement to capture known rates | 1-3% |
-| Premium convergence | Mark/oracle deviation mean-reverts | 2-5% |
-| Cross-venue arbitrage | Trade HL funding divergence from CEX consensus | 1-2% |
-| Maker execution | Limit orders reduce cost vs taker | 0.5-1% |
-| **Combined target** | | **15-25% (normal) / 8-12% (hostile)** |
+| Cross-venue timing | Trade when HL funding diverges from CEX consensus | 1-2% |
+| **Combined target** | | **10-17% (normal) / 5-8% (hostile)** |
+
+**vs Directional (previous):** Delta-neutral deploys 1.8x more capital (70% vs 29%) with zero price risk. Lower theoretical max APY but dramatically more consistent.
 
 ## Architecture
 
@@ -97,6 +95,7 @@ USDC Deposit --> Hyperliquid Vault
 
 | Module | File | Purpose |
 |--------|------|---------|
+| Delta-Neutral Engine | `src/keeper/delta_neutral.py` | Spot + perp paired positions, delta drift monitoring, auto-rotation |
 | Signal Detector | `src/keeper/signal_detector.py` | 4-dimension anomaly detection (OI shift, funding vol, spread, OI drop proxy) |
 | Liquidation Detector | `src/keeper/liquidation_detector.py` | **[HL-specific]** Real liquidation tracking via zero-hash trades, cascade detection |
 | Cross-Venue Detector | `src/keeper/cross_venue_detector.py` | **[HL-specific]** HL vs Binance vs Bybit funding rate comparison |

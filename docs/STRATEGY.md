@@ -2,11 +2,11 @@
 
 ## Thesis
 
-Hyperliquid's deep orderbook and high-leverage environment (up to 50x) creates structural inefficiencies — funding rate dislocations, mark/oracle premium, and aggressive liquidation cascades — that mean-revert predictably. Traditional basis vaults capture these with funding rate harvesting. Kodiak adds a second dimension: **forward-looking anomaly detection** that senses market stress before vol-based indicators react.
+Hyperliquid's deep orderbook and high-leverage environment (up to 50x) creates persistent funding rate dislocations — particularly on native assets like HYPE where no CEX arbitrage exists. Kodiak captures this through **delta-neutral positions** (simultaneous spot buy + perp short) that eliminate price risk entirely, collecting pure funding yield.
 
-**Core insight**: Vol-based leverage scaling is reactive — it reduces exposure *after* volatility has already spiked. By then, slippage is high, liquidity is thin, and drawdowns have already occurred. Kodiak's signal detector monitors six dimensions — including real liquidation events and cross-venue funding divergence — that precede vol spikes, enabling proactive position reduction.
+**Core insight**: Directional funding harvesting (just shorting perps) exposes you to price risk — a single price spike can wipe out weeks of funding income. Delta-neutral execution removes this: spot gains offset perp losses and vice versa. Profit comes purely from the funding rate spread between the two legs.
 
-**Revenue sources**: Funding payments + mark/oracle premium convergence + maker execution advantage. Three sources active across all market conditions, with deployment scaled by regime intelligence.
+**Revenue sources**: Hourly funding payments on delta-neutral positions + funding pre-positioning timing alpha. Deployment scaled by a 6-dimension anomaly detection engine that reduces exposure before market stress.
 
 **Why Hyperliquid**: Compared to Drift (where Yogi operates), Hyperliquid has deeper orderbooks, more aggressive trader behavior (higher leverage = more liquidation cascades = bigger funding dislocations), native vault infrastructure, and a built-in dead man's switch. The protocol's aggressive trading culture creates exactly the kind of dislocations a funding rate + anomaly detection strategy thrives on.
 
@@ -15,44 +15,60 @@ Hyperliquid's deep orderbook and high-leverage environment (up to 50x) creates s
 ### Capital Allocation
 
 ```
-Total Capital
+Total Capital ($220 USDC)
 |
-+-- 100% --> Regime-Adaptive Arbitrage Pool
-             |
-             +-- Signal Detector (every 5 min)
-             |   +-- Fetches all Hyperliquid perp markets
-             |   +-- Computes 4 anomaly dimensions:
-             |   |   1. OI imbalance shift (mass repositioning)
-             |   |   2. Liquidation cascade (OI drop proxy)
-             |   |   3. Funding rate volatility (regime transition)
-             |   |   4. Spread blow-out (mark/oracle stress)
-             |   +-- Autocorrelation-aware: real liquidation data supersedes OI-drop proxy
-             |   +-- Max severity across non-correlated dimensions = aggregate signal
-             |   --> CLEAR (0) / LOW (1) / HIGH (2) / CRITICAL (3)
-             |
-             +-- Regime Engine
-             |   +-- Reads vol regime (Parkinson estimator on BTC)
-             |   +-- Reads signal severity (from detector)
-             |   +-- Looks up deployment matrix:
-             |   |   volRegime x signalSeverity --> deploymentPct + maxLeverage
-             |   +-- Determines rebalanceMode:
-             |       aggressive / normal / cautious / defensive
-             |
-             +-- Imbalance Detector (every 30 min)
-             |   +-- Reads mark/oracle premium (price deviation)
-             |   +-- Reads funding rate (hourly)
-             |   +-- Estimates OI imbalance from funding direction
-             |   +-- Composite: 50% funding + 30% premium + 20% OI
-             |   --> Signal strength + direction (SHORT/LONG/SKIP)
-             |
-             +-- Position Manager
-                 +-- Applies deployment % from regime engine
-                 +-- Scales by regime-adjusted leverage
++-- Regime Engine decides deployment % (0-100%)
+|
++-- Delta-Neutral Engine (when funding > 5% APY)
+|   +-- 70% of deployable --> Buy SPOT (e.g., 2.94 HYPE)
+|   +-- 30% of deployable --> Perp SHORT margin (same 2.94 HYPE)
+|   +-- Price movement cancels: spot gain = perp loss
+|   +-- Collect pure funding yield hourly
+|   +-- Monitor delta drift (rebalance if >5%)
+|   +-- Auto-rotate to higher-yielding asset (if >2x better)
+|
++-- Signal Detector (every 5 min)
+|   +-- 4 anomaly dimensions + real liquidation data
+|   +-- Autocorrelation-aware (real data supersedes proxy)
+|   --> CLEAR / LOW / HIGH / CRITICAL
+|
++-- Cross-Venue Detector (every 5 min)
+|   +-- HL vs Binance vs Bybit funding + OI
+|   --> Entry timing adjustment
+|
++-- Regime Engine
+|   +-- Vol regime x signal severity --> deployment %
+|   --> Close all DN positions if deployment = 0%
                  +-- Uses maker limit orders (1.5 bps)
                  +-- 7-day minimum hold, max 2 rotations/week
 ```
 
 Unlike Yogi which allocates 30% to a lending floor (Kamino/Marginfi), Kodiak deploys 100% to perps because Hyperliquid does not have native lending protocols. Idle capital sits as USDC collateral.
+
+### Delta-Neutral Execution
+
+Kodiak opens **paired positions** to eliminate price risk:
+
+| Component | Allocation | Purpose |
+|-----------|-----------|---------|
+| Spot buy | 70% of deployable capital | Price hedge (gains when price rises) |
+| Perp short margin | 30% of deployable capital | Funding collection (earns when funding positive) |
+| Net delta | 0.0 | Spot and perp sizes matched exactly |
+
+**Example (live, 2026-03-22):**
+```
+Capital: $163.82 deployable (70% of $234 equity)
+Spot BUY: 2.94 HYPE @ $39.05 = $114.81
+Perp SHORT: 2.94 HYPE @ $39.049 = $114.81
+Delta: 0.0000
+Funding: +10.9% APY on $114.81 notional
+```
+
+**Why 70/30?** The perp short requires margin but not the full notional value. 30% margin supports a 1x short position with comfortable headroom. The remaining 70% buys spot — maximizing the hedged notional.
+
+**Delta drift monitoring:** Every signal detection cycle checks that spot and perp sizes still match. If delta drifts beyond 5% (from partial fills, liquidation, or rounding), the keeper rebalances.
+
+**Auto-rotation:** If a different asset's funding rate exceeds the current position's by >2x, the keeper closes the current DN position and opens a new one on the higher-yielding asset.
 
 ### Signal Detection Pipeline
 
