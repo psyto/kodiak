@@ -427,47 +427,63 @@ async def run_dn_rebalance(
         if drift["drifted"]:
             print(f"Delta drift on {pos.coin}: {drift['delta_pct']:.1f}% (spot={drift['spot']:.4f} perp={drift['perp']:.4f})")
 
-    # Find best market for new DN position
+    # Find markets eligible for DN positions
     active_coins = {p.coin for p in dn_positions}
     ranked = [r for r in rank_markets_by_funding(rates) if r.annualized_pct >= min_apy]
+    max_dn_positions = STRATEGY_CONFIG.get("max_markets_simultaneous", 3)
 
     if not ranked:
         print("No markets above minimum funding threshold for DN")
         return
 
-    # Only open 1 DN position at a time (concentrate capital)
-    if dn_positions:
-        # Already have a position — check if there's a much better one
-        current_best = dn_positions[0]
-        current_rate = rate_map.get(current_best.coin)
-        new_best = ranked[0] if ranked else None
+    # Log existing positions
+    for pos in dn_positions:
+        mid = float(info.all_mids().get(pos.coin, 0))
+        print(f"Holding: {format_dn_position(pos, mid)}")
 
-        if new_best and current_rate:
-            # Rotate if new market has >2x the funding
-            if new_best.market not in active_coins and new_best.annualized_pct > current_rate.annualized_pct * 2:
-                print(f"Rotating: {current_best.coin} ({current_rate.annualized_pct:.1f}%) -> {new_best.market} ({new_best.annualized_pct:.1f}%)")
-                await close_delta_neutral(exchange, info, current_best, vault_address)
-                dn_positions.remove(current_best)
-            else:
-                # Log current position
-                mid = float(info.all_mids().get(current_best.coin, 0))
-                print(f"Holding: {format_dn_position(current_best, mid)}")
-                return
+    # Check for rotation: close positions whose market dropped below threshold
+    # (already handled above in exit signals check)
 
-    # Open new DN position on best market
-    best = ranked[0]
-    if best.market in active_coins:
+    # How many new positions can we open?
+    slots_available = max_dn_positions - len(dn_positions)
+    if slots_available <= 0:
+        # Check if any existing position should rotate to a much better market
+        worst = min(dn_positions, key=lambda p: rate_map.get(p.coin, type('', (), {'annualized_pct': 0})()).annualized_pct if rate_map.get(p.coin) else 0)
+        worst_rate = rate_map.get(worst.coin)
+        best_new = next((r for r in ranked if r.market not in active_coins), None)
+
+        if best_new and worst_rate and best_new.annualized_pct > worst_rate.annualized_pct * 2:
+            print(f"Rotating: {worst.coin} ({worst_rate.annualized_pct:.1f}%) -> {best_new.market} ({best_new.annualized_pct:.1f}%)")
+            await close_delta_neutral(exchange, info, worst, vault_address)
+            dn_positions.remove(worst)
+            slots_available = 1
+        else:
+            return
+
+    # Calculate capital per new position
+    # Total deployable minus capital already in existing DN positions
+    capital_in_use = sum(p.notional_usd / 0.70 for p in dn_positions)  # Reverse the 70% to get total capital per pos
+    remaining_capital = max(0, deployable - capital_in_use)
+
+    new_markets = [r for r in ranked if r.market not in active_coins][:slots_available]
+    if not new_markets or remaining_capital < 20:
         return
 
-    capital_for_dn = deployable  # All deployable capital to one DN position
-    print(f"Best market: {best.market} at {best.annualized_pct:.1f}% APY")
+    capital_per_position = remaining_capital / len(new_markets)
 
-    pos = await open_delta_neutral(
-        exchange, info, best.market, capital_for_dn, vault_address, api_url
-    )
-    if pos:
-        pos.entry_funding_rate = best.rate_hourly
-        dn_positions.append(pos)
+    for market_data in new_markets:
+        if capital_per_position < 20:  # Min $20 per DN position
+            print(f"Skipping {market_data.market}: insufficient capital (${capital_per_position:.2f})")
+            continue
+
+        print(f"Opening DN: {market_data.market} at {market_data.annualized_pct:.1f}% APY | capital: ${capital_per_position:.2f}")
+
+        pos = await open_delta_neutral(
+            exchange, info, market_data.market, capital_per_position, vault_address, api_url
+        )
+        if pos:
+            pos.entry_funding_rate = market_data.rate_hourly
+            dn_positions.append(pos)
 
 
 async def run_rebalance(
