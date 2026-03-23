@@ -151,4 +151,5 @@ STRATEGY_CONFIG = {
     "dn_max_delta_drift_pct": 5.0, # Rebalance if delta drifts >5%
     "dn_min_funding_apy": 5.0,     # Minimum funding APY to open DN position
     "dn_tilt_pct": 0.10,           # 10% short bias: perp short is 10% larger than spot
+    "dn_max_slippage_pct": 0.5,    # Max 0.5% slippage on either leg. Reject trade if exceeded.
 }

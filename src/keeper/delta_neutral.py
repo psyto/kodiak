@@ -26,6 +26,7 @@ from hyperliquid.info import Info
 
 from src.config.constants import SIZE_DECIMALS, HL_MAINNET_API
 from src.config.vault import STRATEGY_CONFIG
+from src.keeper.slippage_guard import check_dn_slippage
 
 
 # Spot/perp allocation ratio
@@ -179,6 +180,16 @@ async def open_delta_neutral(
     print(f"Capital: ${capital_usd:.2f} (spot: ${spot_capital:.2f}, margin: ${capital_usd - spot_capital:.2f})")
     print(f"Spot: {spot_size_coins} {coin} | Perp: {perp_size_coins} {coin} @ ${mid_price:.2f}")
     print(f"Spot notional: ${spot_notional:.2f} | Perp notional: ${perp_notional:.2f}")
+
+    # Slippage guard: check order book depth before opening
+    max_slippage = STRATEGY_CONFIG.get("dn_max_slippage_pct", 0.5)
+    slippage_check = check_dn_slippage(
+        coin, spot_size_coins, perp_size_coins, max_slippage, api_url
+    )
+    if not slippage_check["ok"]:
+        print(f"SLIPPAGE GUARD: Rejecting DN entry — {slippage_check['reason']}")
+        return None
+    print(f"Slippage check passed: {slippage_check['reason']}")
 
     # Step 1: Buy spot
     # IMPORTANT: On Hyperliquid, perp uses coin name ("HYPE") but spot uses
