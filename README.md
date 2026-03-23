@@ -181,6 +181,44 @@ Hyperliquid settles funding hourly, on the hour. The predicted rate is known bef
 
 This is pure timing alpha — capturing a known event, not predicting.
 
+### 4. HyperLend Yield on Idle USDC
+
+Kodiak's tilted DN uses ~45% of equity for the HYPE position. The remaining ~55% sits as idle USDC. Instead of leaving it dead, Kodiak deposits idle USDC into **HyperLend** on HyperEVM to earn ~5% lending APY.
+
+**Smart switching logic:**
+- **Default:** Idle USDC → HyperCore → HyperEVM → HyperLend Pool (~5% APY)
+- **High funding (>15% APY):** Withdraw from HyperLend → open directional short
+- **Funding normalizes:** Close directional → back to HyperLend
+
+**Flow:**
+```
+Idle USDC ($170 on $219 equity)
+  |
+  +-- No high funding → HyperLend deposit (~5% = $8.50/year)
+  |     spotSend to system address → auto-credit on HyperEVM
+  |     approve + supply to HyperLend Pool (Aave V3 interface)
+  |
+  +-- Funding >15% on BTC/ETH/SOL → Withdraw + directional short
+        withdraw from Pool → approve + deposit to CoreWriter
+        → back on HyperCore → open perp short
+```
+
+**Contract addresses:**
+- USDC on HyperEVM: `0xb88339CB7199b77E23DB6E890353E22632Ba630f`
+- HyperLend Pool: `0x00A89d7a5A02160f20150EbEA7a2b5E4879A1A8b`
+- Bridge system address: `0x2000000000000000000000000000000000000000`
+
+This is **Layer 4** of Kodiak's yield stacking — no other DN vault on Hyperliquid combines funding harvesting with automatic lending yield on idle capital.
+
+### 5. Slippage Guard
+
+Before opening any DN position, Kodiak walks the L2 order book for both spot and perp markets to estimate fill price slippage:
+
+- Rejects entry if estimated slippage exceeds 0.5% on either leg
+- Prevents entering during thin liquidity (the primary risk for DN strategies)
+- Uses `@107` book identifier for HYPE spot, `HYPE` for perp
+- Configurable threshold via `dn_max_slippage_pct`
+
 ## Regime Engine
 
 The regime engine is Kodiak's core differentiator. It combines two inputs into a deployment decision:
