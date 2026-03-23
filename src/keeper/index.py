@@ -16,6 +16,7 @@ import asyncio
 import os
 import sys
 import time
+from typing import Optional
 
 from dotenv import load_dotenv
 from eth_account import Account
