@@ -157,4 +157,5 @@ STRATEGY_CONFIG = {
     "hyperlend_enabled": True,
     "hyperlend_min_deposit": 10.0,  # Min USDC to deposit into HyperLend
     "directional_funding_threshold_apy": 15.0,  # Only open directional if funding >15% (otherwise lend)
+    "hyperlend_buffer_pct": 0.30,  # Keep 30% of idle USDC on HyperCore as margin buffer
 }

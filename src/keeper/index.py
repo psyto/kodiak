@@ -580,9 +580,15 @@ async def run_dn_rebalance(
                 print(f"  Failed to open directional {market_data.market}: {err}")
     elif remaining >= 10 and not lending_state and private_key:
         # No high funding — deposit idle USDC into HyperLend
-        lending_state = await deposit_idle_usdc(exchange, private_key, remaining)
-        if lending_state:
-            print(f"Idle USDC → HyperLend: ${lending_state.deposited_usdc:.2f} earning ~5% APY")
+        # Keep 30% as margin buffer on HyperCore for emergencies
+        buffer_pct = STRATEGY_CONFIG.get("hyperlend_buffer_pct", 0.30)
+        deposit_amount = remaining * (1 - buffer_pct)
+        buffer_amount = remaining * buffer_pct
+        if deposit_amount >= STRATEGY_CONFIG.get("hyperlend_min_deposit", 10.0):
+            print(f"Idle USDC: ${remaining:.2f} → HyperLend: ${deposit_amount:.2f} | Buffer: ${buffer_amount:.2f}")
+            lending_state = await deposit_idle_usdc(exchange, private_key, deposit_amount)
+            if lending_state:
+                print(f"Idle USDC → HyperLend: ${lending_state.deposited_usdc:.2f} earning ~5% APY (buffer: ${buffer_amount:.2f} on Core)")
 
 
 async def run_rebalance(
