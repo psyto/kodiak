@@ -58,6 +58,28 @@ USDC Deposit --> Hyperliquid Vault
                               +-- Dead man's switch (auto-cancel if keeper offline)
 ```
 
+### Tilted Delta-Neutral — Unique on Hyperliquid
+
+No other Hyperliquid vault offers **configurable directional bias** within a delta-neutral framework. Liminal and Harmonix both run pure DN (delta=0). Kodiak adds an optional short tilt:
+
+```
+Pure DN:    spot=1.65 HYPE + perp=-1.65 HYPE  →  delta=0     (zero price risk)
+Tilted DN:  spot=1.30 HYPE + perp=-1.43 HYPE  →  delta=-10%  (slight short bias)
+```
+
+**Why tilt?**
+
+| Market | Pure DN | Tilted DN (10% short) |
+|--------|--------|----------------------|
+| Price drops 10% | $0 | **+profit** (tilt earns) |
+| Price flat | Same | **+more funding** (larger perp) |
+| Price pumps <11% | Same | Still better (funding covers tilt loss) |
+| Price pumps >11% | Better | Tilt starts losing |
+
+The tilt is configurable (`dn_tilt_pct` in config). Set to 0.0 for pure DN, 0.10 for 10% short bias. The regime engine can adjust this based on market conditions — more tilt in bearish markets, less in bullish.
+
+**Break-even:** At HYPE +10.9% funding, the asset can pump 10.9% annually before the tilt loses money vs pure DN.
+
 ### What Makes Kodiak Different from Yogi
 
 | | Yogi (Drift) | Kodiak (Hyperliquid) |
@@ -72,8 +94,8 @@ USDC Deposit --> Hyperliquid Vault
 | Lending floor | 30% (Kamino/Marginfi) | None (100% to perps) |
 | Markets | SOL, BTC, ETH, DOGE, SUI, AVAX | BTC, ETH, SOL, HYPE |
 | Safety | scheduleCancel not native | Dead man's switch built-in |
-| Execution | Directional perp shorts | **Delta-neutral: spot buy + perp short** |
-| Price risk | Directional (PnL swings) | **Near zero (hedged)** |
+| Execution | Directional perp shorts | **Tilted DN: spot buy + larger perp short** |
+| Price risk | Directional (PnL swings) | **Near zero + configurable short bias** |
 | Liquidation data | OI drop proxy | Real liquidation events (zero-hash trades) |
 | Cross-venue | Drift vs Binance/Bybit | HL vs Binance vs Bybit funding + OI |
 | Funding timing | Continuous (no timing alpha) | Hourly pre-positioning (10 min before settlement) |
@@ -82,12 +104,16 @@ USDC Deposit --> Hyperliquid Vault
 
 | Source | Mechanism | Est. APY Contribution |
 |--------|-----------|----------------------|
-| Delta-neutral funding | Spot buy + perp short, collect hourly funding | 8-12% |
+| Delta-neutral funding | Spot buy + perp short, collect hourly funding | 5-8% |
+| Tilt directional income | 10% short bias profits when price drops | 0-5% (market dependent) |
+| Tilt extra funding | Larger perp = 10% more funding collected | 0.5-1% |
 | Funding pre-positioning | Enter before hourly settlement to capture known rates | 1-3% |
 | Cross-venue timing | Trade when HL funding diverges from CEX consensus | 1-2% |
-| **Combined target** | | **10-17% (normal) / 5-8% (hostile)** |
+| **Combined target** | | **8-15% (bearish) / 5-8% (bullish)** |
 
-**vs Directional (previous):** Delta-neutral deploys 1.8x more capital (70% vs 29%) with zero price risk. Lower theoretical max APY but dramatically more consistent.
+**vs Pure DN:** Tilted DN earns more in bearish/flat markets (the common case). Only underperforms in strong bull markets where HYPE pumps >11% annually.
+
+**vs Directional:** Tilted DN retains ~90% of the hedge while adding directional upside. Price swings are 10x smaller than pure directional.
 
 ## Architecture
 

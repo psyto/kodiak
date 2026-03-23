@@ -47,28 +47,42 @@ Unlike Yogi which allocates 30% to a lending floor (Kamino/Marginfi), Kodiak dep
 
 ### Delta-Neutral Execution
 
-Kodiak opens **paired positions** to eliminate price risk:
+Kodiak opens **paired positions** with an optional **directional tilt** — a feature unique to Kodiak on Hyperliquid (neither Liminal nor Harmonix offer this):
 
 | Component | Allocation | Purpose |
 |-----------|-----------|---------|
-| Spot buy | 70% of deployable capital | Price hedge (gains when price rises) |
-| Perp short margin | 30% of deployable capital | Funding collection (earns when funding positive) |
-| Net delta | 0.0 | Spot and perp sizes matched exactly |
+| Spot buy | 70% of deployable capital | Price hedge |
+| Perp short margin | 30% of deployable capital | Funding collection |
+| Net delta | **-10% (configurable)** | Slight short bias for extra yield |
+
+**Pure DN vs Tilted DN:**
+```
+Pure DN:    spot=1.65 HYPE + perp=-1.65 HYPE  →  delta=0      (zero price risk)
+Tilted DN:  spot=1.30 HYPE + perp=-1.43 HYPE  →  delta=-10%   (short bias)
+```
 
 **Example (live, 2026-03-22):**
 ```
-Capital: $163.82 deployable (70% of $234 equity)
-Spot BUY: 2.94 HYPE @ $39.05 = $114.81
-Perp SHORT: 2.94 HYPE @ $39.049 = $114.81
-Delta: 0.0000
-Funding: +10.9% APY on $114.81 notional
+Capital: $64.00 deployable
+Spot BUY: 1.30 HYPE/USDC @ $38.25 (filled)
+Perp SHORT: 1.43 HYPE @ $38.26 (filled, 10% larger than spot)
+Delta: -0.13 (-10.0%) | tilt=10%
+Funding: +10.9% APY on $54.65 notional (perp leg)
 ```
+
+**Why tilt?**
+- **More funding:** 10% larger perp = 10% more funding income
+- **Directional upside:** In bearish markets (current), the short bias profits from price drops
+- **Limited downside:** HYPE must pump >10.9% (one year of funding yield) before the tilt loses money vs pure DN
+- **Configurable:** `dn_tilt_pct: 0.10` in config. Set to 0.0 for pure DN at any time
 
 **Why 70/30?** The perp short requires margin but not the full notional value. 30% margin supports a 1x short position with comfortable headroom. The remaining 70% buys spot — maximizing the hedged notional.
 
 **Delta drift monitoring:** Every signal detection cycle checks that spot and perp sizes still match. If delta drifts beyond 5% (from partial fills, liquidation, or rounding), the keeper rebalances.
 
 **Auto-rotation:** If a different asset's funding rate exceeds the current position's by >2x, the keeper closes the current DN position and opens a new one on the higher-yielding asset.
+
+**Competitive positioning:** No other Hyperliquid vault offers tilted DN. Liminal ($30M TVL) and Harmonix ($6M TVL) both run pure DN (delta=0) only. Kodiak's configurable tilt is a unique differentiator for depositors who want funding yield with optional directional exposure.
 
 ### Signal Detection Pipeline
 
