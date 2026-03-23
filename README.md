@@ -8,10 +8,10 @@ Kodiak is a production-grade USDC vault that combines **delta-neutral funding ra
 
 Kodiak deploys capital into **delta-neutral positions** — buying spot and shorting perps on the same asset — to harvest funding rates with zero price exposure:
 
-1. **Delta-Neutral Execution (70/30 split):**
-   - **70% → Spot buy** (e.g., buy 2.94 HYPE at $39.05)
-   - **30% → Perp margin** (short 2.94 HYPE perp at $39.05)
-   - Price movement cancels out. Profit comes purely from funding.
+1. **Hybrid Execution — DN + Directional:**
+   - **HYPE:** Tilted delta-neutral (spot buy + larger perp short, 10% short bias)
+   - **BTC/ETH/SOL:** Directional shorts when funding is positive (capped at 20% of equity each)
+   - Deploys more capital across more markets than pure DN alone
 2. **Intelligence Layer** — Signal detection adjusts how much capital is deployed:
    - No anomalies: 70-100% deployed
    - Low signals: 55-85% deployed
@@ -24,14 +24,18 @@ Kodiak deploys capital into **delta-neutral positions** — buying spot and shor
 ```
 USDC Deposit --> Hyperliquid Vault
                  |
-                 +-- 100% --> Delta-Neutral Engine
+                 +-- 100% --> Hybrid Engine (DN + Directional)
                               |
-                              +-- Delta-Neutral Execution
-                              |   +-- 70% capital --> Buy SPOT asset
-                              |   +-- 30% capital --> Short PERP (same size)
-                              |   +-- Price cancels out. Pure funding yield.
-                              |   +-- Delta drift monitoring (rebalance if >5%)
-                              |   +-- Auto-rotate to highest funding market
+                              +-- HYPE: Tilted Delta-Neutral
+                              |   +-- 70% capital --> Buy SPOT HYPE
+                              |   +-- 30% capital --> Short PERP (10% larger)
+                              |   +-- Price mostly hedged. Slight short bias.
+                              |   +-- Slippage guard checks order book depth
+                              |
+                              +-- BTC/ETH/SOL: Directional Shorts
+                              |   +-- When funding positive (>5% APY)
+                              |   +-- Capped at 20% equity per position
+                              |   +-- Managed by regime engine (close on CRITICAL)
                               |
                               +-- Signal Detector (every 5 min)
                               |   +-- OI imbalance shift (mass positioning)

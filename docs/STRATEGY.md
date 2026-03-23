@@ -84,6 +84,35 @@ Funding: +10.9% APY on $54.65 notional (perp leg)
 
 **Competitive positioning:** No other Hyperliquid vault offers tilted DN. Liminal ($30M TVL) and Harmonix ($6M TVL) both run pure DN (delta=0) only. Kodiak's configurable tilt is a unique differentiator for depositors who want funding yield with optional directional exposure.
 
+### Hybrid Mode — DN + Directional
+
+Only HYPE has a liquid spot/USDC pair on Hyperliquid. For other assets (BTC, ETH, SOL), delta-neutral execution isn't possible because there's no spot market to buy.
+
+Kodiak solves this with **hybrid mode**: DN on HYPE (safe), directional shorts on BTC/ETH/SOL (when funding is positive):
+
+```
+Capital Allocation:
+  HYPE  --> Tilted DN (spot + perp, 10% short bias)    [safe]
+  BTC   --> Directional short (perp only, if funding >5%)  [price risk]
+  ETH   --> Directional short (perp only, if funding >5%)  [price risk]
+  SOL   --> Directional short (perp only, if funding >5%)  [price risk]
+```
+
+**Safety constraints on directional positions:**
+- Each capped at **20% of total equity** (prevents margin stress)
+- Only opened when funding exceeds 5% APY threshold
+- Regime engine closes all on CRITICAL signals
+- Position loading on startup prevents duplicate stacking
+
+**Capital efficiency comparison:**
+
+| Mode | HYPE deployed | BTC/ETH/SOL deployed | Total |
+|------|--------------|---------------------|-------|
+| Pure DN only | ~$45 | $0 | $45 (21%) |
+| Hybrid (DN + directional) | ~$45 | ~$44 each | $130+ (59%) |
+
+Hybrid mode roughly **triples** capital deployment compared to pure DN, at the cost of introducing price risk on the directional portion.
+
 ### Signal Detection Pipeline
 
 The signal detector runs every 5 minutes — 6x faster than the funding scan. Each dimension independently classifies severity:
