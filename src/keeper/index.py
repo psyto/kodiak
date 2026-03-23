@@ -400,9 +400,9 @@ async def run_dn_rebalance(
     vault_address: str | None,
     api_url: str,
 ) -> None:
-    """Run delta-neutral rebalance cycle."""
-    global dn_positions
-    print("\n--- Rebalance Cycle (DELTA-NEUTRAL) ---")
+    """Run hybrid rebalance: DN for markets with spot pairs, directional for others."""
+    global dn_positions, active_positions
+    print("\n--- Rebalance Cycle (HYBRID: DN + Directional) ---")
 
     effective_leverage = (
         current_regime.max_leverage
@@ -414,10 +414,13 @@ async def run_dn_rebalance(
     # Close all if regime says zero
     if effective_leverage == 0 or deployment_pct == 0:
         mode = current_regime.rebalance_mode if current_regime else "unknown"
-        print(f"Regime: {mode} — closing all DN positions")
+        print(f"Regime: {mode} — closing all positions")
         for pos in list(dn_positions):
             await close_delta_neutral(exchange, info, pos, vault_address)
         dn_positions.clear()
+        for pos in list(active_positions):
+            await close_basis_position(exchange, info, pos.market, vault_address)
+        active_positions.clear()
         return
 
     total_equity = get_equity(info, exchange, vault_address, api_url)
@@ -502,6 +505,67 @@ async def run_dn_rebalance(
         if pos:
             pos.entry_funding_rate = market_data.rate_hourly
             dn_positions.append(pos)
+
+    # --- HYBRID: Directional shorts for markets without spot pairs ---
+    # After DN positions are opened, use remaining capital for directional shorts
+    from src.keeper.delta_neutral import PERP_TO_SPOT
+
+    # Check existing directional positions for exit
+    for pos in list(active_positions):
+        rate = rate_map.get(pos.market)
+        if rate:
+            exit_info = should_exit_position(pos, rate.rate_hourly)
+            if exit_info["exit"]:
+                print(f"Closing directional {pos.market}: {exit_info['reason']}")
+                await close_basis_position(exchange, info, pos.market, vault_address)
+                active_positions.remove(pos)
+
+    # Recalculate remaining capital after DN positions
+    dn_capital = sum(p.notional_usd / 0.70 for p in dn_positions)
+    dir_capital = sum(p.size_usd for p in active_positions)
+    remaining = max(0, deployable - dn_capital - dir_capital)
+
+    if remaining < 10:
+        return
+
+    # Find directional candidates: positive funding, no spot pair (can't DN), not already in DN or directional
+    all_active = {p.coin for p in dn_positions} | {p.market for p in active_positions}
+    directional_candidates = [
+        r for r in ranked
+        if r.market not in all_active
+        and r.market not in PERP_TO_SPOT  # No spot pair = directional only
+        and r.annualized_pct >= min_apy
+    ]
+
+    if directional_candidates:
+        # Allocate remaining capital across directional positions
+        max_dir = max(1, max_dn_positions - len(dn_positions) - len(active_positions))
+        dir_markets = directional_candidates[:max_dir]
+        capital_per_dir = remaining / len(dir_markets)
+
+        for market_data in dir_markets:
+            if capital_per_dir < 10:
+                continue
+
+            size_usd = capital_per_dir * effective_leverage
+            if size_usd < 5:
+                continue
+
+            try:
+                print(f"  Opening directional SHORT {market_data.market}: funding +{market_data.annualized_pct:.1f}% APY | ${size_usd:.2f}")
+                await open_basis_position(
+                    exchange, info, market_data.market, size_usd, "short", vault_address
+                )
+                active_positions.append(BasisPosition(
+                    market=market_data.market,
+                    direction="short",
+                    size_usd=size_usd,
+                    size_coin=0,
+                    entry_funding_rate=market_data.rate_hourly,
+                    entry_timestamp=time.time(),
+                ))
+            except Exception as err:
+                print(f"  Failed to open directional {market_data.market}: {err}")
 
 
 async def run_rebalance(
@@ -866,8 +930,8 @@ async def main() -> None:
             (STRATEGY_CONFIG["rebalance_interval_ms"] - (now_ms - last_rebalance * 1000)) / 60000
         )
 
-        pos_count = len(dn_positions) if STRATEGY_CONFIG.get("delta_neutral_mode") else len(active_positions)
-        dn_tag = " [DN]" if STRATEGY_CONFIG.get("delta_neutral_mode") else ""
+        pos_count = len(dn_positions) + len(active_positions) if STRATEGY_CONFIG.get("delta_neutral_mode") else len(active_positions)
+        dn_tag = f" [DN:{len(dn_positions)} DIR:{len(active_positions)}]" if STRATEGY_CONFIG.get("delta_neutral_mode") else ""
         print(
             f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}]{dn_tag} "
             f"Positions: {pos_count} | "
