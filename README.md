@@ -95,7 +95,7 @@ The tilt is configurable (`dn_tilt_pct` in config). Set to 0.0 for pure DN, 0.10
 | Funding | Continuous | Hourly settlement |
 | Maker fees | -0.2 bps (rebate) | 1.5 bps |
 | Max leverage | 2x | 2x (50x available, capped by regime) |
-| Lending floor | 30% (Kamino/Marginfi) | Not integrated (HyperLend available on HyperEVM) |
+| Lending floor | 30% (Kamino/Marginfi) | HyperLend on idle USDC (Layer 4, integrated) |
 | Markets | SOL, BTC, ETH, DOGE, SUI, AVAX | BTC, ETH, SOL, HYPE |
 | Safety | scheduleCancel not native | Dead man's switch built-in |
 | Execution | Directional perp shorts | **Tilted DN: spot buy + larger perp short** |
@@ -106,14 +106,16 @@ The tilt is configurable (`dn_tilt_pct` in config). Set to 0.0 for pure DN, 0.10
 
 ### Yield Stack
 
-| Source | Mechanism | Est. APY Contribution |
-|--------|-----------|----------------------|
-| Delta-neutral funding | Spot buy + perp short, collect hourly funding | 5-8% |
-| Tilt directional income | 10% short bias profits when price drops | 0-5% (market dependent) |
-| Tilt extra funding | Larger perp = 10% more funding collected | 0.5-1% |
-| Funding pre-positioning | Enter before hourly settlement to capture known rates | 1-3% |
-| Cross-venue timing | Trade when HL funding diverges from CEX consensus | 1-2% |
-| **Combined target** | | **8-15% (bearish) / 5-8% (bullish)** |
+| Source | Mechanism | Est. APY Contribution | Status |
+|--------|-----------|----------------------|--------|
+| Delta-neutral funding | Spot buy + perp short, collect hourly funding | 5-8% | Live |
+| Tilt directional income | 10% short bias profits when price drops | 0-5% | Live |
+| Tilt extra funding | Larger perp = 10% more funding collected | 0.5-1% | Live |
+| HyperLend yield | Idle USDC earns lending yield on HyperEVM | 3-5% | Integrated |
+| Funding pre-positioning | Enter before hourly settlement to capture known rates | 1-3% | Live |
+| Cross-venue timing | Trade when HL funding diverges from CEX consensus | 1-2% | Live |
+| HYPE staking (kHYPE) | Stake spot HYPE via Kinetiq for validator rewards | 5% | Planned |
+| **Combined target** | | **10-18% (bearish) / 7-12% (bullish)** | |
 
 **vs Pure DN:** Tilted DN earns more in bearish/flat markets (the common case). Only underperforms in strong bull markets where HYPE pumps >11% annually.
 
@@ -126,6 +128,8 @@ The tilt is configurable (`dn_tilt_pct` in config). Set to 0.0 for pure DN, 0.10
 | Module | File | Purpose |
 |--------|------|---------|
 | Delta-Neutral Engine | `src/keeper/delta_neutral.py` | Spot + perp paired positions, delta drift monitoring, auto-rotation |
+| HyperLend Integration | `src/keeper/hyperlend.py` | Deposit idle USDC to HyperEVM lending for ~5% APY, auto-withdraw for opportunities |
+| Slippage Guard | `src/keeper/slippage_guard.py` | Check L2 order book depth before DN entry, reject if slippage >0.5% |
 | Signal Detector | `src/keeper/signal_detector.py` | 4-dimension anomaly detection (OI shift, funding vol, spread, OI drop proxy) |
 | Liquidation Detector | `src/keeper/liquidation_detector.py` | **[HL-specific]** Real liquidation tracking via zero-hash trades, cascade detection |
 | Cross-Venue Detector | `src/keeper/cross_venue_detector.py` | **[HL-specific]** HL vs Binance vs Bybit funding rate comparison |

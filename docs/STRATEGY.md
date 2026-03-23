@@ -113,6 +113,31 @@ Capital Allocation:
 
 Hybrid mode roughly **triples** capital deployment compared to pure DN, at the cost of introducing price risk on the directional portion.
 
+### HYPE Yield Stacking — 5 Layers
+
+Kodiak's product vision is stacking multiple yield layers on HYPE:
+
+| Layer | Source | APY | Status |
+|-------|--------|-----|--------|
+| 1 | DN funding (perp short collects hourly) | 5-8% | **Live** |
+| 2 | Tilt bonus (10% extra short) | 0.5-3% | **Live** |
+| 3 | HyperLend (idle USDC lending on HyperEVM) | 3-5% | **Integrated** |
+| 4 | HYPE staking (spot HYPE → kHYPE via Kinetiq) | ~5% | Planned |
+| 5 | Airdrop positioning (HL activity rewards) | Unknown | Passive |
+
+**Smart hybrid logic:** Idle USDC defaults to HyperLend (~5% safe yield). When any market's funding exceeds 15% APY, automatically withdraws from HyperLend and opens a directional short to capture the higher opportunity. Returns to HyperLend when funding normalizes.
+
+**Flow:**
+```
+Idle USDC
+  |
+  +-- Funding < 15% APY anywhere → HyperLend (~5% safe)
+  |     HyperCore → spotSend → HyperEVM → HyperLend Pool
+  |
+  +-- Funding > 15% APY on BTC/ETH/SOL → Directional short
+        Withdraw HyperLend → HyperEVM → HyperCore → Open perp
+```
+
 ### Signal Detection Pipeline
 
 The signal detector runs every 5 minutes — 6x faster than the funding scan. Each dimension independently classifies severity:
@@ -359,7 +384,7 @@ At higher volume tiers, maker fees drop further (0% at >$500M 14-day volume) wit
 ## Known Limitations
 
 1. **OI imbalance estimation** — Hyperliquid does not expose long/short OI split directly. We estimate imbalance from funding rate direction and magnitude. This is a proxy, not ground truth. The real liquidation detector partially compensates by providing actual direction bias data.
-2. **No lending floor (yet)** — HyperLend on HyperEVM could earn ~5% on idle USDC, but is not integrated due to added smart contract risk at current scale. Planned for AUM >$5K.
+2. **HyperLend integrated but untested at scale** — Idle USDC is deposited into HyperLend on HyperEVM for ~5% lending yield. Automatically withdraws when directional opportunities arise (funding >15% APY). Smart contract risk exists — HyperLend launched Mar 2025 (~1 year old).
 3. **Signal detection building track record** — The anomaly detector is adapted from Yogi's Drift-tuned thresholds. Hyperliquid's different microstructure may require threshold adjustments after live observation. Liquidation thresholds (USD/min) are initial estimates and may need calibration.
 4. **Regime matrices are manually tuned** — The 5x4 deployment/leverage matrices were designed from first principles, not optimized from Hyperliquid historical data. Adaptive thresholds based on rolling volatility are planned for when capital scales beyond $5K.
 5. **Single keeper SPOF** — A single Python process on EC2 handles all decisions. The dead man's switch (`scheduleCancel`) provides safety if the keeper goes offline, but multi-node redundancy is not yet implemented.
