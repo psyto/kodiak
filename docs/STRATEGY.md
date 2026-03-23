@@ -43,7 +43,7 @@ Total Capital ($220 USDC)
                  +-- 7-day minimum hold, max 2 rotations/week
 ```
 
-Unlike Yogi which allocates 30% to a lending floor (Kamino/Marginfi), Kodiak deploys 100% to perps because Hyperliquid does not have native lending protocols. Idle capital sits as USDC collateral.
+Unlike Yogi which allocates 30% to a lending floor (Kamino/Marginfi), Kodiak currently deploys 100% to perps. HyperLend (a lending protocol on HyperEVM) is available but not yet integrated — at current capital scale, the extra yield (~$2.50/year) doesn't justify the added smart contract risk. Integration is planned when AUM exceeds $5K.
 
 ### Delta-Neutral Execution
 
@@ -359,7 +359,7 @@ At higher volume tiers, maker fees drop further (0% at >$500M 14-day volume) wit
 ## Known Limitations
 
 1. **OI imbalance estimation** — Hyperliquid does not expose long/short OI split directly. We estimate imbalance from funding rate direction and magnitude. This is a proxy, not ground truth. The real liquidation detector partially compensates by providing actual direction bias data.
-2. **No lending floor** — Unlike Yogi which earns 1.5-6.5% APY on idle capital via Kamino/Marginfi, Kodiak's idle USDC earns nothing. Capital efficiency depends entirely on perp deployment.
+2. **No lending floor (yet)** — HyperLend on HyperEVM could earn ~5% on idle USDC, but is not integrated due to added smart contract risk at current scale. Planned for AUM >$5K.
 3. **Signal detection building track record** — The anomaly detector is adapted from Yogi's Drift-tuned thresholds. Hyperliquid's different microstructure may require threshold adjustments after live observation. Liquidation thresholds (USD/min) are initial estimates and may need calibration.
 4. **Regime matrices are manually tuned** — The 5x4 deployment/leverage matrices were designed from first principles, not optimized from Hyperliquid historical data. Adaptive thresholds based on rolling volatility are planned for when capital scales beyond $5K.
 5. **Single keeper SPOF** — A single Python process on EC2 handles all decisions. The dead man's switch (`scheduleCancel`) provides safety if the keeper goes offline, but multi-node redundancy is not yet implemented.

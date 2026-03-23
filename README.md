@@ -95,7 +95,7 @@ The tilt is configurable (`dn_tilt_pct` in config). Set to 0.0 for pure DN, 0.10
 | Funding | Continuous | Hourly settlement |
 | Maker fees | -0.2 bps (rebate) | 1.5 bps |
 | Max leverage | 2x | 2x (50x available, capped by regime) |
-| Lending floor | 30% (Kamino/Marginfi) | None (100% to perps) |
+| Lending floor | 30% (Kamino/Marginfi) | Not integrated (HyperLend available on HyperEVM) |
 | Markets | SOL, BTC, ETH, DOGE, SUI, AVAX | BTC, ETH, SOL, HYPE |
 | Safety | scheduleCancel not native | Dead man's switch built-in |
 | Execution | Directional perp shorts | **Tilted DN: spot buy + larger perp short** |
