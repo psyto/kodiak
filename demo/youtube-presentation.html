@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>Kodiak Vault — YouTube Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1920px; height: 1080px; overflow: hidden; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; background: #0a0a0f; color: #e0e0e0; }
+  .slide { position: absolute; top: 0; left: 0; width: 1920px; height: 1080px; display: flex; flex-direction: column; justify-content: center; align-items: center; opacity: 0; transition: opacity 0.8s ease; padding: 80px; }
+  .slide.active { opacity: 1; }
+  h1 { font-size: 72px; margin-bottom: 20px; }
+  h2 { font-size: 52px; margin-bottom: 30px; color: #8b9dc3; }
+  p { font-size: 28px; line-height: 1.6; max-width: 1400px; text-align: center; }
+  .accent { color: #f0b040; } .green { color: #40c057; } .red { color: #e03131; } .dim { color: #666; } .blue { color: #5fb3d4; }
+  .title-slide h1 { font-size: 96px; }
+  .title-slide .subtitle { font-size: 32px; color: #8b9dc3; margin-top: 10px; }
+  .title-slide .tagline { font-size: 40px; color: #f0b040; margin-top: 30px; }
+  .terminal { background: #111118; border: 1px solid #333; border-radius: 12px; padding: 30px 40px; width: 1500px; text-align: left; font-size: 20px; line-height: 1.8; }
+  .terminal .label { color: #5fb3d4; } .terminal .warn { color: #f0b040; } .terminal .ok { color: #40c057; } .terminal .crit { color: #e03131; }
+  table { width: 1400px; border-collapse: collapse; font-size: 22px; }
+  th { color: #f0b040; padding: 14px 20px; text-align: left; border-bottom: 2px solid #333; }
+  td { padding: 14px 20px; border-bottom: 1px solid #222; }
+  .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; width: 1400px; }
+  .stat-card { background: #111118; border: 1px solid #333; border-radius: 12px; padding: 30px; text-align: center; }
+  .stat-value { font-size: 52px; color: #f0b040; margin: 10px 0; }
+  .stat-label { font-size: 20px; color: #888; }
+  .progress { position: fixed; bottom: 0; left: 0; height: 4px; background: #f0b040; transition: width 0.5s ease; z-index: 100; }
+  .slide-number { position: fixed; bottom: 20px; right: 40px; font-size: 18px; color: #444; z-index: 100; }
+  .fade-item { opacity: 0; transform: translateY(20px); transition: all 0.6s ease; }
+  .fade-item.visible { opacity: 1; transform: translateY(0); }
+  .signal-box { display: flex; gap: 16px; width: 1500px; margin-top: 20px; }
+  .sig-card { flex: 1; border-radius: 12px; padding: 20px; text-align: center; background: #111118; border: 1px solid #333; }
+  .sig-card.active-sig { border-color: #f0b040; }
+</style>
+</head>
+<body>
+
+<!-- Slide 1: Title -->
+<div class="slide title-slide" id="slide-1">
+  <div class="fade-item" style="font-size: 140px; margin-bottom: 20px;">&#x1f43b;</div>
+  <h1 class="fade-item">Kodiak</h1>
+  <div class="subtitle fade-item">The Biggest Bear in the Room</div>
+  <div class="tagline fade-item">Tilted Delta-Neutral + 5-Layer Yield Stacking on Hyperliquid</div>
+  <p class="fade-item" style="margin-top: 40px; color: #666;">The only vault on Hyperliquid with configurable directional bias</p>
+</div>
+
+<!-- Slide 2: The Problem -->
+<div class="slide" id="slide-2">
+  <h2 class="fade-item">Pure DN Vaults Leave Money on the Table</h2>
+  <p class="fade-item" style="font-size: 30px; margin-bottom: 40px;">Liminal and Harmonix run delta=0. Same yield, same limitations. Kodiak is different.</p>
+  <table class="fade-item">
+    <tr><th></th><th>Liminal / Harmonix</th><th>Kodiak</th></tr>
+    <tr>
+      <td>Delta</td>
+      <td>0 (flat)</td>
+      <td class="green">-10% (configurable short bias)</td>
+    </tr>
+    <tr>
+      <td>Bear market</td>
+      <td>Funding only</td>
+      <td class="green">Funding + directional profit</td>
+    </tr>
+    <tr>
+      <td>Signal detection</td>
+      <td>None</td>
+      <td class="green">6 dimensions + liquidation + cross-venue</td>
+    </tr>
+    <tr>
+      <td>Idle capital</td>
+      <td>Earns nothing</td>
+      <td class="green">HyperLend (~5% APY)</td>
+    </tr>
+    <tr>
+      <td>Slippage guard</td>
+      <td>Unknown</td>
+      <td class="green">L2 order book depth check</td>
+    </tr>
+  </table>
+</div>
+
+<!-- Slide 3: Tilted DN -->
+<div class="slide" id="slide-3">
+  <h2 class="fade-item">Tilted Delta-Neutral — Unique on Hyperliquid</h2>
+  <div class="terminal fade-item" style="font-size: 22px;">
+    <span class="label">Pure DN (Liminal, Harmonix):</span><br>
+    &nbsp;&nbsp;spot = 1.65 HYPE &nbsp;+ perp = -1.65 HYPE &nbsp;&#x2192; delta = <span class="dim">0.0 (zero price exposure)</span><br><br>
+    <span class="label">Tilted DN (Kodiak):</span><br>
+    &nbsp;&nbsp;spot = 1.30 HYPE &nbsp;+ perp = -1.43 HYPE &nbsp;&#x2192; delta = <span class="accent">-10% (short bias)</span><br><br>
+    <span class="label">What this means:</span><br>
+    &nbsp;&nbsp;HYPE drops 10% &#x2192; Kodiak earns <span class="green">+$4.50 extra</span> (on $45 notional)<br>
+    &nbsp;&nbsp;HYPE flat &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&#x2192; Kodiak earns <span class="green">+10% more funding</span> (larger perp)<br>
+    &nbsp;&nbsp;HYPE pumps 11%+ &#x2192; Tilt costs vs pure DN (funding covers up to 11%)<br><br>
+    <span class="dim">Configurable: dn_tilt_pct = 0.0 (pure DN) to 0.10 (10% short) to any value</span>
+  </div>
+</div>
+
+<!-- Slide 4: 5-Layer Yield Stack -->
+<div class="slide" id="slide-4">
+  <h2 class="fade-item">5-Layer HYPE Yield Stacking</h2>
+  <table class="fade-item">
+    <tr><th>Layer</th><th>Source</th><th>APY</th><th>Status</th></tr>
+    <tr>
+      <td>1</td>
+      <td>DN funding (perp short collects hourly)</td>
+      <td class="green">5-8%</td>
+      <td class="green">Live</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>Tilt bonus (10% extra short)</td>
+      <td class="green">0.5-3%</td>
+      <td class="green">Live</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>HyperLend (idle USDC lending on HyperEVM)</td>
+      <td class="green">3-5%</td>
+      <td class="green">Integrated</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td style="color: #666;">HYPE staking (kHYPE via Kinetiq)</td>
+      <td style="color: #666;">~5%</td>
+      <td style="color: #666;">Planned</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td style="color: #666;">Airdrop positioning (HL activity rewards)</td>
+      <td style="color: #666;">Unknown</td>
+      <td style="color: #666;">Passive</td>
+    </tr>
+    <tr style="border-top: 2px solid #f0b040;">
+      <td></td>
+      <td><strong>Live now</strong></td>
+      <td class="accent"><strong>8-16%</strong></td>
+      <td></td>
+    </tr>
+  </table>
+  <p class="fade-item" style="margin-top: 20px; font-size: 24px; color: #888;">Same HYPE. 3x the yield. No other vault stacks this deep.</p>
+</div>
+
+<!-- Slide 5: Signal Detection -->
+<div class="slide" id="slide-5">
+  <h2 class="fade-item">6-Dimension Signal Detection</h2>
+  <div class="signal-box">
+    <div class="sig-card fade-item">
+      <h3 style="font-size: 20px;">OI Shift</h3>
+      <p style="font-size: 16px;">Mass repositioning</p>
+    </div>
+    <div class="sig-card fade-item">
+      <h3 style="font-size: 20px;">Liquidation</h3>
+      <p style="font-size: 16px;">Zero-hash trades<br>(HL-specific)</p>
+    </div>
+    <div class="sig-card fade-item">
+      <h3 style="font-size: 20px;">Funding Vol</h3>
+      <p style="font-size: 16px;">Regime transition</p>
+    </div>
+    <div class="sig-card fade-item">
+      <h3 style="font-size: 20px;">Spread</h3>
+      <p style="font-size: 16px;">Mark/oracle stress</p>
+    </div>
+    <div class="sig-card active-sig fade-item">
+      <h3 style="font-size: 20px; color: #f0b040;">Cross-Venue</h3>
+      <p style="font-size: 16px;">HL vs Binance<br>vs Bybit + OI</p>
+    </div>
+    <div class="sig-card active-sig fade-item">
+      <h3 style="font-size: 20px; color: #f0b040;">Liquidation<br>Cascade</h3>
+      <p style="font-size: 16px;">Real events<br>(HL-specific)</p>
+    </div>
+  </div>
+  <p class="fade-item" style="margin-top: 20px; font-size: 24px;">Autocorrelation-aware: real liquidation data supersedes OI proxy. No double-counting.</p>
+</div>
+
+<!-- Slide 6: Cross-Venue Live -->
+<div class="slide" id="slide-6">
+  <h2 class="fade-item">Cross-Venue Intelligence — 3 DEX Comparison</h2>
+  <div class="terminal fade-item" style="font-size: 20px;">
+    <span class="label">Hyperliquid vs Binance vs Bybit (live data):</span><br><br>
+    &nbsp;&nbsp;BTC:&nbsp; HL=<span class="green">+7.4%</span> | Bin=<span class="red">-1.9%</span> | Byb=<span class="green">+5.4%</span> | spread=<span class="green">+5.6%</span> &#x2192; hl_high | OI: $9,324M<br>
+    &nbsp;&nbsp;ETH:&nbsp; HL=<span class="red">-5.8%</span> | Bin=<span class="red">-1.5%</span> | Byb=<span class="red">-2.4%</span> | spread=<span class="red">-3.8%</span> &#x2192; aligned<br>
+    &nbsp;&nbsp;HYPE: HL=<span class="green">+10.9%</span> | Bin=N/A | Byb=N/A | spread=<span class="green">+10.9%</span> &#x2192; no CEX arb<br>
+    &nbsp;&nbsp;SOL:&nbsp; HL=<span class="red">-23.8%</span> | Bin=<span class="red">-2.8%</span> | Byb=<span class="red">-10.0%</span> | spread=<span class="red">-17.4%</span> &#x2192; hl_low<br><br>
+    <span class="accent">HYPE has no CEX listing &#x2192; no arbitrageurs &#x2192; persistently high funding.</span><br>
+    <span class="dim">This is why Kodiak focuses on HYPE. The market inefficiency is structural.</span>
+  </div>
+</div>
+
+<!-- Slide 7: HyperLend Integration -->
+<div class="slide" id="slide-7">
+  <h2 class="fade-item">HyperLend — No Idle Capital</h2>
+  <div class="terminal fade-item" style="font-size: 20px;">
+    <span class="label">Smart Hybrid Logic:</span><br><br>
+    Idle USDC ($170 on $219 equity)<br>
+    &nbsp;&nbsp;|<br>
+    &nbsp;&nbsp;+-- No high funding &#x2192; <span class="ok">HyperLend deposit (~5% APY)</span><br>
+    &nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp;HyperCore &#x2192; spotSend &#x2192; HyperEVM &#x2192; HyperLend Pool<br>
+    &nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp;30% buffer kept on Core for margin safety<br>
+    &nbsp;&nbsp;|<br>
+    &nbsp;&nbsp;+-- Funding &gt;15% on BTC/ETH/SOL &#x2192; <span class="warn">Withdraw + directional short</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Auto-withdraw &#x2192; open perp short &#x2192; capture spike<br><br>
+    <span class="dim">No capital sits idle. It's either earning lending yield or capturing funding spikes.</span>
+  </div>
+</div>
+
+<!-- Slide 8: Safety Features -->
+<div class="slide" id="slide-8">
+  <h2 class="fade-item">Built for Safety</h2>
+  <div class="stats-grid fade-item">
+    <div class="stat-card">
+      <div class="stat-label">Slippage Guard</div>
+      <div class="stat-value" style="font-size: 36px;">L2 Book</div>
+      <div class="stat-label">Rejects thin liquidity</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Position Loading</div>
+      <div class="stat-value" style="font-size: 36px;">On Start</div>
+      <div class="stat-label">No duplicate stacking</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Dead Man's Switch</div>
+      <div class="stat-value" style="font-size: 36px;">1hr</div>
+      <div class="stat-label">Auto-cancel if offline</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">HyperLend Buffer</div>
+      <div class="stat-value" style="font-size: 36px;">30%</div>
+      <div class="stat-label">Margin safety reserve</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Autocorrelation</div>
+      <div class="stat-value" style="font-size: 36px;">Aware</div>
+      <div class="stat-label">No signal double-counting</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Health Check</div>
+      <div class="stat-value" style="font-size: 36px;">30s</div>
+      <div class="stat-label">Emergency close all</div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 9: Live Performance -->
+<div class="slide" id="slide-9">
+  <h2 class="fade-item">Live on Hyperliquid Mainnet</h2>
+  <div class="terminal fade-item" style="font-size: 20px;">
+    <span class="label">Kodiak Keeper — Tilted DN + Hybrid</span><br><br>
+    [DN:1 DIR:0] Positions: 1 | Equity: <span class="accent">$220.28</span> | Regime: aggressive (90% @ 1.0x)<br><br>
+    <span class="label">HYPE Delta-Neutral Position:</span><br>
+    &nbsp;&nbsp;Spot BUY: 1.30 HYPE/USDC @ $38.25 <span class="ok">(filled)</span><br>
+    &nbsp;&nbsp;Perp SHORT: 1.43 HYPE @ $38.26 <span class="ok">(filled, 10% tilt)</span><br>
+    &nbsp;&nbsp;Delta: -0.13 (-10.0%) | Notional: $49.71<br><br>
+    <span class="label">Real Liquidation Detection:</span><br>
+    &nbsp;&nbsp;HYPE: $5,438 in 5min (9 events, $1,088/min) [short_squeezed]<br>
+    &nbsp;&nbsp;&#x2192; DN position unaffected (price hedged)<br><br>
+    <span class="dim">Running 24/7 on AWS EC2. pm2 auto-restart. Position loading on startup.</span>
+  </div>
+</div>
+
+<!-- Slide 10: The Bear Family -->
+<div class="slide" id="slide-10">
+  <h2 class="fade-item">The Bear Family</h2>
+  <table class="fade-item" style="font-size: 24px;">
+    <tr><th>Vault</th><th>Venue</th><th>Strategy</th><th>Unique Edge</th></tr>
+    <tr>
+      <td><strong>Yogi</strong></td>
+      <td>Drift (Solana)</td>
+      <td>Directional + 5D signals</td>
+      <td>Cross-venue, Voltr integration</td>
+    </tr>
+    <tr>
+      <td class="accent"><strong>Kodiak</strong></td>
+      <td class="accent">Hyperliquid</td>
+      <td class="accent">Tilted DN + hybrid</td>
+      <td class="accent">5-layer stacking, unique on HL</td>
+    </tr>
+    <tr>
+      <td>Grizzly</td>
+      <td>Backpack</td>
+      <td>Paper trading (DN)</td>
+      <td>3-DEX cross-intelligence</td>
+    </tr>
+  </table>
+  <p class="fade-item" style="margin-top: 30px; font-size: 24px;">Same strategy DNA. Venue-specific intelligence. Each extends the base.</p>
+</div>
+
+<!-- Slide 11: Why HYPE -->
+<div class="slide" id="slide-11">
+  <h2 class="fade-item">Why HYPE Is the Perfect Asset for DN</h2>
+  <div class="terminal fade-item" style="font-size: 22px;">
+    <span class="label">Structural Funding Advantage:</span><br><br>
+    &nbsp;&nbsp;1. <span class="accent">No CEX listing</span> &#x2192; no arbitrageurs compressing the rate<br>
+    &nbsp;&nbsp;2. <span class="accent">Community permanently bullish</span> &#x2192; longs 3x shorts ($14M vs $4.7M)<br>
+    &nbsp;&nbsp;3. <span class="accent">Only major asset with spot pair</span> on HL &#x2192; DN only works on HYPE<br>
+    &nbsp;&nbsp;4. <span class="accent">Staking composability</span> &#x2192; kHYPE adds future yield layer<br>
+    &nbsp;&nbsp;5. <span class="accent">40% HYPE undistributed</span> &#x2192; activity may qualify for airdrops<br><br>
+    <span class="label">Result:</span> HYPE funding has been <span class="green">consistently +10.9% APY</span> for weeks.<br>
+    BTC/ETH/SOL funding on HL is near zero (efficient markets).<br><br>
+    <span class="dim">Kodiak exploits the one market where the inefficiency is structural and persistent.</span>
+  </div>
+</div>
+
+<!-- Slide 12: Closing -->
+<div class="slide title-slide" id="slide-12">
+  <div class="fade-item" style="font-size: 140px; margin-bottom: 20px;">&#x1f43b;</div>
+  <h1 class="fade-item">Kodiak</h1>
+  <div class="tagline fade-item">The Smartest HYPE Vault on Hyperliquid</div>
+  <div class="fade-item" style="font-size: 28px; color: #8b9dc3; margin-top: 20px;">Tilted DN + 5-Layer Stacking + 6D Signal Detection</div>
+  <p class="fade-item" style="margin-top: 30px; font-size: 24px;">
+    github.com/psyto/kodiak<br><br>
+    <span class="dim">Same yield as Liminal. Better risk management. Unique directional tilt.</span><br>
+    <span class="dim">Part of the Bear Family: Yogi (Drift) | Kodiak (Hyperliquid) | Grizzly (Backpack)</span>
+  </p>
+</div>
+
+<div class="progress" id="progress"></div>
+<div class="slide-number" id="slide-number">1 / 12</div>
+
+<script>
+  const TOTAL = 12;
+  let current = 0;
+  function show(n) {
+    document.querySelectorAll('.slide').forEach(s => s.classList.remove('active'));
+    const sl = document.getElementById('slide-' + (n + 1));
+    if (sl) {
+      sl.querySelectorAll('.fade-item').forEach(e => e.classList.remove('visible'));
+      sl.classList.add('active');
+    }
+    document.getElementById('progress').style.width = ((n + 1) / TOTAL * 100) + '%';
+    document.getElementById('slide-number').textContent = (n + 1) + ' / ' + TOTAL;
+  }
+  show(0);
+  setInterval(() => {
+    current = (current + 1) % TOTAL;
+    show(current);
+    const sl = document.getElementById('slide-' + (current + 1));
+    if (sl) {
+      const items = sl.querySelectorAll('.fade-item');
+      items.forEach((item, i) => {
+        setTimeout(() => item.classList.add('visible'), (i + 1) * 400);
+      });
+    }
+  }, 15000);
+  setTimeout(() => {
+    document.querySelectorAll('#slide-1 .fade-item').forEach((item, i) => {
+      setTimeout(() => item.classList.add('visible'), (i + 1) * 400);
+    });
+  }, 300);
+</script>
+</body>
+</html>
