@@ -547,7 +547,9 @@ async def run_dn_rebalance(
             if capital_per_dir < 10:
                 continue
 
-            size_usd = capital_per_dir * effective_leverage
+            # Limit directional size to 20% of total equity to avoid health issues
+            max_dir_size = total_equity * 0.20
+            size_usd = min(capital_per_dir * effective_leverage, max_dir_size)
             if size_usd < 5:
                 continue
 
