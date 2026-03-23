@@ -101,14 +101,32 @@ def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_ur
     state = resp.json()
     total += float(state.get("marginSummary", {}).get("accountValue", "0"))
 
-    # Spot USDC balance (idle capital in unified mode)
+    # Spot balances (USDC + any held tokens like HYPE for DN)
     resp2 = requests.post(f"{api_url}/info", json={
         "type": "spotClearinghouseState", "user": user_addr
     }, timeout=10)
     spot = resp2.json()
+
+    # Get mid prices for non-USDC tokens
+    all_mids = {}
+    try:
+        mid_resp = requests.post(f"{api_url}/info", json={"type": "allMids"}, timeout=10)
+        all_mids = mid_resp.json()
+    except Exception:
+        pass
+
     for bal in spot.get("balances", []):
-        if bal["coin"] == "USDC":
-            total += float(bal["total"])
+        coin = bal["coin"]
+        amount = float(bal.get("total", 0))
+        if amount <= 0:
+            continue
+        if coin == "USDC":
+            total += amount
+        else:
+            # Convert non-USDC spot to USD using mid price
+            mid_price = float(all_mids.get(coin, 0))
+            if mid_price > 0:
+                total += amount * mid_price
 
     return total
 
