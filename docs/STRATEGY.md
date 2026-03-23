@@ -43,7 +43,7 @@ Total Capital ($220 USDC)
                  +-- 7-day minimum hold, max 2 rotations/week
 ```
 
-Unlike Yogi which allocates 30% to a lending floor (Kamino/Marginfi), Kodiak currently deploys 100% to perps. HyperLend (a lending protocol on HyperEVM) is available but not yet integrated — at current capital scale, the extra yield (~$2.50/year) doesn't justify the added smart contract risk. Integration is planned when AUM exceeds $5K.
+Unlike Yogi which allocates 30% to a lending floor (Kamino/Marginfi), Kodiak uses a **smart hybrid approach**: idle USDC is automatically deposited into HyperLend on HyperEVM to earn ~5% lending yield. When a high-funding opportunity arises (>15% APY on any market), the keeper withdraws from HyperLend and opens a directional short instead. This ensures no capital sits idle — it's either earning lending yield or capturing elevated funding rates.
 
 ### Delta-Neutral Execution
 
