@@ -83,6 +83,12 @@ from src.keeper.delta_neutral import (
     check_delta_drift,
     format_dn_position,
 )
+from src.keeper.hyperlend import (
+    LendingState,
+    deposit_idle_usdc,
+    withdraw_all_to_hypercore,
+    get_hyperlend_balance,
+)
 
 
 def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_url: str) -> float:
@@ -134,6 +140,7 @@ def get_equity(info: Info, exchange: Exchange, vault_address: str | None, api_ur
 # --- Global State ---
 active_positions: list[BasisPosition] = []
 dn_positions: list[DeltaNeutralPosition] = []  # Delta-neutral positions
+lending_state: Optional[LendingState] = None   # HyperLend deposit state
 peak_equity: float = 0
 current_leverage: LeverageState | None = None
 latest_imbalances: list[MarketImbalance] = []
@@ -506,9 +513,11 @@ async def run_dn_rebalance(
             pos.entry_funding_rate = market_data.rate_hourly
             dn_positions.append(pos)
 
-    # --- HYBRID: Directional shorts for markets without spot pairs ---
-    # After DN positions are opened, use remaining capital for directional shorts
+    # --- SMART HYBRID: HyperLend for idle USDC, directional only when funding >15% ---
     from src.keeper.delta_neutral import PERP_TO_SPOT
+
+    private_key = os.getenv("HL_PRIVATE_KEY", "")
+    directional_threshold = STRATEGY_CONFIG.get("directional_funding_threshold_apy", 15.0)
 
     # Check existing directional positions for exit
     for pos in list(active_positions):
@@ -520,39 +529,38 @@ async def run_dn_rebalance(
                 await close_basis_position(exchange, info, pos.market, vault_address)
                 active_positions.remove(pos)
 
-    # Recalculate remaining capital after DN positions
+    # Recalculate remaining capital
     dn_capital = sum(p.notional_usd / 0.70 for p in dn_positions)
     dir_capital = sum(p.size_usd for p in active_positions)
-    remaining = max(0, deployable - dn_capital - dir_capital)
+    lend_capital = lending_state.deposited_usdc if lending_state else 0
+    remaining = max(0, deployable - dn_capital - dir_capital - lend_capital)
 
     if remaining < 10:
         return
 
-    # Find directional candidates: positive funding, no spot pair (can't DN), not already in DN or directional
+    # Check if any market has funding >15% (worth pulling from HyperLend)
     all_active = {p.coin for p in dn_positions} | {p.market for p in active_positions}
-    directional_candidates = [
+    high_funding = [
         r for r in ranked
         if r.market not in all_active
-        and r.market not in PERP_TO_SPOT  # No spot pair = directional only
-        and r.annualized_pct >= min_apy
+        and r.market not in PERP_TO_SPOT
+        and r.annualized_pct >= directional_threshold
     ]
 
-    if directional_candidates:
-        # Allocate remaining capital across directional positions
-        max_dir = max(1, max_dn_positions - len(dn_positions) - len(active_positions))
-        dir_markets = directional_candidates[:max_dir]
-        capital_per_dir = remaining / len(dir_markets)
+    if high_funding:
+        # High funding opportunity — withdraw from HyperLend if needed, open directional
+        if lending_state and private_key:
+            print(f"High funding detected ({high_funding[0].market} at {high_funding[0].annualized_pct:.1f}%) — withdrawing from HyperLend")
+            withdrawn = await withdraw_all_to_hypercore(private_key)
+            if withdrawn > 0:
+                remaining += withdrawn
+                lending_state = None
 
-        for market_data in dir_markets:
-            if capital_per_dir < 10:
-                continue
-
-            # Limit directional size to 20% of total equity to avoid health issues
-            max_dir_size = total_equity * 0.20
-            size_usd = min(capital_per_dir * effective_leverage, max_dir_size)
+        max_dir_size = total_equity * 0.20
+        for market_data in high_funding[:2]:
+            size_usd = min(remaining * 0.5 * effective_leverage, max_dir_size)
             if size_usd < 5:
                 continue
-
             try:
                 print(f"  Opening directional SHORT {market_data.market}: funding +{market_data.annualized_pct:.1f}% APY | ${size_usd:.2f}")
                 await open_basis_position(
@@ -566,8 +574,14 @@ async def run_dn_rebalance(
                     entry_funding_rate=market_data.rate_hourly,
                     entry_timestamp=time.time(),
                 ))
+                remaining -= size_usd / effective_leverage
             except Exception as err:
                 print(f"  Failed to open directional {market_data.market}: {err}")
+    elif remaining >= 10 and not lending_state and private_key:
+        # No high funding — deposit idle USDC into HyperLend
+        lending_state = await deposit_idle_usdc(exchange, private_key, remaining)
+        if lending_state:
+            print(f"Idle USDC → HyperLend: ${lending_state.deposited_usdc:.2f} earning ~5% APY")
 
 
 async def run_rebalance(
@@ -933,7 +947,8 @@ async def main() -> None:
         )
 
         pos_count = len(dn_positions) + len(active_positions) if STRATEGY_CONFIG.get("delta_neutral_mode") else len(active_positions)
-        dn_tag = f" [DN:{len(dn_positions)} DIR:{len(active_positions)}]" if STRATEGY_CONFIG.get("delta_neutral_mode") else ""
+        lend_str = f" LEND:${lending_state.deposited_usdc:.0f}" if lending_state else ""
+        dn_tag = f" [DN:{len(dn_positions)} DIR:{len(active_positions)}{lend_str}]" if STRATEGY_CONFIG.get("delta_neutral_mode") else ""
         print(
             f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}]{dn_tag} "
             f"Positions: {pos_count} | "
